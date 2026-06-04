@@ -5,6 +5,8 @@ async def set_default_commands(dp):
     await dp.bot.set_my_commands(
         [
             types.BotCommand("start", "Start the bot"),
+            types.BotCommand("status", "List currently flagged vehicles"),
+            types.BotCommand("history", "Recent disconnection events"),
             types.BotCommand("help", "Help"),
         ]
     )

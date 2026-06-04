@@ -8,6 +8,8 @@ from loader import dp
 async def bot_help(message: types.Message):
     text = ("Commands: ",
             "/start - Start the bot",
+            "/status - List currently flagged vehicles",
+            "/history - Recent disconnection events",
             "/help - Help")
-    
+
     await message.answer("\n".join(text))
