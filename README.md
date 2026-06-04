@@ -58,6 +58,9 @@ Disconnected on GreenLight ELD but still moving on GoMotive.
 
 ## Quick start
 
+> For detailed, step-by-step setup (including how to fill in `.env` and common
+> gotchas), see **[SETUP.md](SETUP.md)**.
+
 aiogram 2.x pins `aiohttp 3.8.x`, which has no wheels for Python 3.12+. **Use
 Python 3.9–3.11** (developed on 3.11).
 
