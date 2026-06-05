@@ -1,10 +1,15 @@
 """Human-readable rendering of anomaly events for Telegram (HTML parse mode)."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from .store import AnomalyEvent
+
+# All stored/computed times are naive UTC; alerts display them in US Eastern
+# (handles EST/EDT automatically via the IANA tz database).
+_EASTERN = ZoneInfo("America/New_York")
 
 
 def human_duration(seconds: int) -> str:
@@ -24,7 +29,8 @@ def _fmt_time(value: Optional[str]) -> str:
     if not value:
         return "unknown"
     try:
-        return datetime.fromisoformat(value).strftime("%Y-%m-%d %H:%M:%S UTC")
+        dt = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+        return dt.astimezone(_EASTERN).strftime("%Y-%m-%d %I:%M:%S %p %Z")
     except ValueError:
         return value
 
