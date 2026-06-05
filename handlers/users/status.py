@@ -8,7 +8,7 @@ from utils.eld.formatting import format_status_line
 
 @dp.message_handler(Command("status"))
 async def show_status(message: types.Message):
-    events = store.get_active_events()
+    events = await store.get_active_events()
     if not events:
         await message.answer("✅ No vehicles currently flagged.")
         return

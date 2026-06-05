@@ -29,7 +29,7 @@ from utils.eld.greenlight import GreenLightVehicle  # noqa: E402
 
 
 async def run(unit: str | None, stale_min: int, twice: bool) -> int:
-    store.init_db()
+    await store.init_db()
 
     moving = await gomotive.fetch_moving_vehicles(config.MOVING_SPEED_THRESHOLD)
     if not moving:
@@ -77,7 +77,7 @@ async def run(unit: str | None, stale_min: int, twice: bool) -> int:
         await session.close()
 
     print("\nActive (flagged) events — what /status shows:")
-    for e in store.get_active_events():
+    for e in await store.get_active_events():
         print(f"  {e.unit_number}: {e.last_speed} mph @ {e.last_location} "
               f"(disconnected {e.eld_disconnect_time})")
 
@@ -87,13 +87,8 @@ async def run(unit: str | None, stale_min: int, twice: bool) -> int:
 
 async def cleanup() -> int:
     """Delete mock events outright so they don't linger in /history."""
-    import sqlite3
-
-    store.init_db()
-    conn = sqlite3.connect(config.DB_PATH)
-    n = conn.execute("DELETE FROM events WHERE driver = 'TEST DRIVER'").rowcount
-    conn.commit()
-    conn.close()
+    await store.init_db()
+    n = await store.delete_events_by_driver("TEST DRIVER")
     print(f"Deleted {n} mock event(s).")
     return 0
 

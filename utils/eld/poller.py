@@ -43,26 +43,34 @@ async def poll_once(bot: Bot) -> None:
     anomalies = find_anomalies(
         moving, gl_lookup, threshold_seconds=config.ELD_STALE_THRESHOLD
     )
-    found_in_gl = sum(1 for v in gl_lookup.values() if v is not None)
+    # Units GoMotive reports moving but GreenLight has no record for (content:
+    # null). Normally these are units outside our GreenLight account and are
+    # safely ignored; log them so a real fleet vehicle that ever lands here
+    # (i.e. a disconnection we'd otherwise miss) is visible.
+    not_in_gl = [u for u, v in gl_lookup.items() if v is None]
+    found_in_gl = len(moving) - len(not_in_gl)
     logger.info(
         "Poll: %d moving, %d found in GreenLight, %d anomalies",
         len(moving), found_in_gl, len(anomalies),
     )
+    if not_in_gl:
+        logger.info("Poll: %d moving units not in GreenLight (skipped): %s",
+                    len(not_in_gl), not_in_gl)
 
     flagged_now = set()
     for anomaly in anomalies:
         flagged_now.add(anomaly.unit_number)
         gl, gm = anomaly.greenlight, anomaly.gomotive
         location = gm.location or gl.location_label
-        existing = store.get_active_event(anomaly.unit_number)
+        existing = await store.get_active_event(anomaly.unit_number)
         if existing:
             # Ongoing event — update readings, do NOT re-alert (de-dup).
-            store.touch_event(existing.id, speed=gm.speed, location=location)
+            await store.touch_event(existing.id, speed=gm.speed, location=location)
         else:
             disconnect_time = (
                 gl.last_report_time.isoformat() if gl.last_report_time else None
             )
-            event = store.open_event(
+            event = await store.open_event(
                 unit_number=anomaly.unit_number,
                 vin=gl.vin,
                 driver=gl.driver,
@@ -73,9 +81,9 @@ async def poll_once(bot: Bot) -> None:
             await _send_alert(bot, event)
 
     # Auto-resolve events that are no longer anomalous.
-    for active in store.get_active_events():
+    for active in await store.get_active_events():
         if active.unit_number not in flagged_now:
-            store.resolve_event(active.id)
+            await store.resolve_event(active.id)
             logger.info("Resolved anomaly for vehicle %s", active.unit_number)
 
 
@@ -86,7 +94,7 @@ _REPEAT_REMINDER_EVERY = 12  # at 5-min polls, ~once per hour
 
 
 async def run_poller(bot: Bot) -> None:
-    store.init_db()
+    await store.init_db()
     logger.info("ELD anomaly poller started (interval=%ds).", config.POLL_INTERVAL)
     last_error: str | None = None
     repeat_count = 0

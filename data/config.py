@@ -35,5 +35,9 @@ ELD_STALE_THRESHOLD = env.int("ELD_STALE_THRESHOLD", 600)
 # Speed (mph) above which a vehicle is considered "moving" on GoMotive.
 MOVING_SPEED_THRESHOLD = env.float("MOVING_SPEED_THRESHOLD", 0.0)
 
-# SQLite database file for flagged vehicles and event history.
+# Persistence for flagged vehicles and event history.
+# If DATABASE_URL is set (Railway provides this for a Postgres plugin), the bot
+# uses PostgreSQL via asyncpg; otherwise it falls back to a local SQLite file at
+# DB_PATH. Accepts postgres:// or postgresql:// DSNs.
+DATABASE_URL = env.str("DATABASE_URL", "")
 DB_PATH = env.str("DB_PATH", "db.sqlite3")

@@ -2,3 +2,5 @@ aiogram~=2.25
 environs~=8.0.0
 marshmallow<4  # environs 8.0.0 is incompatible with marshmallow 4.x (it removed __version__)
 tzdata  # IANA tz database for zoneinfo (Windows ships no system tz db)
+asyncpg~=0.31  # PostgreSQL driver (used when DATABASE_URL is set, e.g. on Railway)
+aiosqlite~=0.22  # async SQLite driver (local fallback when DATABASE_URL is unset)

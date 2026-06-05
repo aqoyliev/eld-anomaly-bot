@@ -10,7 +10,7 @@ HISTORY_LIMIT = 20
 
 @dp.message_handler(Command("history"))
 async def show_history(message: types.Message):
-    events = store.get_recent_events(limit=HISTORY_LIMIT)
+    events = await store.get_recent_events(limit=HISTORY_LIMIT)
     if not events:
         await message.answer("No disconnection events recorded yet.")
         return

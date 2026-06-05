@@ -11,8 +11,9 @@ from utils.eld.poller import run_poller
 
 
 async def on_startup(dispatcher):
-    # Initialise the anomaly-events database
-    store.init_db()
+    # Initialise the anomaly-events database (Postgres if DATABASE_URL is set,
+    # else local SQLite) and its connection pool.
+    await store.init_db()
 
     # Default commands (/start, /status, /history, /help)
     await set_default_commands(dispatcher)
@@ -24,5 +25,10 @@ async def on_startup(dispatcher):
     asyncio.create_task(run_poller(bot))
 
 
+async def on_shutdown(dispatcher):
+    # Release the database connection pool (no-op for SQLite).
+    await store.close()
+
+
 if __name__ == '__main__':
-    executor.start_polling(dp, on_startup=on_startup)
+    executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown)
