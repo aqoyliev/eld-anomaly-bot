@@ -37,7 +37,13 @@ CREATE TABLE IF NOT EXISTS events (
     last_speed          DOUBLE PRECISION,
     last_location       TEXT,
     resolved            INTEGER          NOT NULL DEFAULT 0,
-    resolved_at         TEXT
+    resolved_at         TEXT,
+    vehicle_id          TEXT,
+    last_lat            DOUBLE PRECISION,
+    last_lon            DOUBLE PRECISION,
+    last_alert_at       TEXT,
+    stop_notified       INTEGER          NOT NULL DEFAULT 0,
+    reminders_muted     INTEGER          NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
@@ -54,10 +60,27 @@ CREATE TABLE IF NOT EXISTS events (
     last_speed          REAL,
     last_location       TEXT,
     resolved            INTEGER NOT NULL DEFAULT 0,
-    resolved_at         TEXT
+    resolved_at         TEXT,
+    vehicle_id          TEXT,
+    last_lat            DOUBLE PRECISION,
+    last_lon            DOUBLE PRECISION,
+    last_alert_at       TEXT,
+    stop_notified       INTEGER NOT NULL DEFAULT 0,
+    reminders_muted     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
+
+# Columns added after the first release. CREATE TABLE above only covers fresh
+# installs, so init_db also applies these to a pre-existing table, idempotently.
+_MIGRATIONS = [
+    ("vehicle_id", "TEXT"),
+    ("last_lat", "DOUBLE PRECISION"),
+    ("last_lon", "DOUBLE PRECISION"),
+    ("last_alert_at", "TEXT"),
+    ("stop_notified", "INTEGER NOT NULL DEFAULT 0"),
+    ("reminders_muted", "INTEGER NOT NULL DEFAULT 0"),
+]
 
 
 @dataclass
@@ -73,6 +96,12 @@ class AnomalyEvent:
     last_location: Optional[str]
     resolved: int
     resolved_at: Optional[str]
+    vehicle_id: Optional[str] = None
+    last_lat: Optional[float] = None
+    last_lon: Optional[float] = None
+    last_alert_at: Optional[str] = None
+    stop_notified: int = 0
+    reminders_muted: int = 0
 
     @property
     def disconnect_dt(self) -> Optional[datetime]:
@@ -128,6 +157,10 @@ async def init_db() -> None:
             )
         async with _pool.acquire() as conn:
             await conn.execute(_SCHEMA_PG)
+            for name, ddl in _MIGRATIONS:
+                await conn.execute(
+                    f"ALTER TABLE events ADD COLUMN IF NOT EXISTS {name} {ddl}"
+                )
     else:
         import aiosqlite
 
@@ -135,6 +168,11 @@ async def init_db() -> None:
         _sqlite_path = config.DB_PATH
         async with aiosqlite.connect(_sqlite_path) as db:
             await db.executescript(_SCHEMA_SQLITE)
+            cur = await db.execute("PRAGMA table_info(events)")
+            existing = {row[1] for row in await cur.fetchall()}
+            for name, ddl in _MIGRATIONS:
+                if name not in existing:
+                    await db.execute(f"ALTER TABLE events ADD COLUMN {name} {ddl}")
             await db.commit()
 
 
@@ -217,14 +255,21 @@ async def open_event(
     eld_disconnect_time: Optional[str],
     speed: Optional[float],
     location: Optional[str],
+    vehicle_id: Optional[str] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
 ) -> AnomalyEvent:
-    """Create a new active anomaly event and return it (caller then alerts)."""
+    """Create a new active anomaly event and return it (caller then alerts).
+    ``last_alert_at`` is seeded with ``now`` since the caller sends the initial
+    alert immediately; the 30-min reminder clock counts from there."""
     now = datetime.utcnow().isoformat(timespec="seconds")
     event_id = await _insert_returning_id(
         "INSERT INTO events (unit_number, vin, driver, eld_disconnect_time, "
-        "first_detected, last_seen, last_speed, last_location) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "first_detected, last_seen, last_speed, last_location, vehicle_id, "
+        "last_lat, last_lon, last_alert_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         unit_number, vin, driver, eld_disconnect_time, now, now, speed, location,
+        vehicle_id, lat, lon, now,
     )
     row = await _fetchrow("SELECT * FROM events WHERE id = $1", event_id)
     return _row_to_event(row)
@@ -235,13 +280,33 @@ async def touch_event(
     *,
     speed: Optional[float],
     location: Optional[str],
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
 ) -> None:
     """Update an ongoing event with the latest reading (no new alert)."""
     now = datetime.utcnow().isoformat(timespec="seconds")
     await _execute(
-        "UPDATE events SET last_seen = $1, last_speed = $2, last_location = $3 "
-        "WHERE id = $4",
-        now, speed, location, event_id,
+        "UPDATE events SET last_seen = $1, last_speed = $2, last_location = $3, "
+        "last_lat = $4, last_lon = $5 WHERE id = $6",
+        now, speed, location, lat, lon, event_id,
+    )
+
+
+async def mark_alerted(event_id: int) -> None:
+    """Record that a group notification (initial or reminder) was just sent."""
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    await _execute("UPDATE events SET last_alert_at = $1 WHERE id = $2", now, event_id)
+
+
+async def set_stop_notified(event_id: int, value: int) -> None:
+    await _execute(
+        "UPDATE events SET stop_notified = $1 WHERE id = $2", value, event_id
+    )
+
+
+async def mute_reminders(event_id: int) -> None:
+    await _execute(
+        "UPDATE events SET reminders_muted = 1 WHERE id = $1", event_id
     )
 
 

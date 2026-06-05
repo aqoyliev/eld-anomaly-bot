@@ -35,11 +35,21 @@ class GreenLightVehicle:
     state: Optional[str]
     location: Optional[str]
     last_report_time: Optional[datetime]
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
     @property
     def location_label(self) -> str:
         parts = [p for p in (self.location, self.state) if p]
         return ", ".join(parts) if parts else "unknown"
+
+    @property
+    def coordinates_label(self) -> str:
+        """GreenLight's last-reported lat,long (the point where the ELD went
+        dark). Falls back to the place name if coordinates are missing."""
+        if self.latitude is not None and self.longitude is not None:
+            return f"{self.latitude}, {self.longitude}"
+        return self.location_label
 
 
 def greenlight_key(unit_number: str) -> str:
@@ -75,6 +85,7 @@ def _parse_vehicle(content: dict) -> Optional[GreenLightVehicle]:
         return None
     location = content.get("location") or {}
     driver = (content.get("driver") or {}).get("name")
+    coords = location.get("vehicle_coordinates") or {}
     return GreenLightVehicle(
         unit_number=str(unit_number),
         vin=vehicle.get("vin"),
@@ -82,6 +93,8 @@ def _parse_vehicle(content: dict) -> Optional[GreenLightVehicle]:
         state=location.get("state"),
         location=location.get("location"),
         last_report_time=_parse_time(location.get("time")),
+        latitude=coords.get("latitude"),
+        longitude=coords.get("longitude"),
     )
 
 

@@ -57,15 +57,15 @@ async def poll_once(bot: Bot) -> None:
         logger.info("Poll: %d moving units not in GreenLight (skipped): %s",
                     len(not_in_gl), not_in_gl)
 
-    flagged_now = set()
     for anomaly in anomalies:
-        flagged_now.add(anomaly.unit_number)
         gl, gm = anomaly.greenlight, anomaly.gomotive
-        location = gm.location or gl.location_label
+        # GoMotive's current coordinates = where the truck actually is right now.
+        location = gm.coordinates_label
         existing = await store.get_active_event(anomaly.unit_number)
         if existing:
             # Ongoing event — update readings, do NOT re-alert (de-dup).
-            await store.touch_event(existing.id, speed=gm.speed, location=location)
+            await store.touch_event(existing.id, speed=gm.speed, location=location,
+                                    lat=gm.latitude, lon=gm.longitude)
         else:
             disconnect_time = (
                 gl.last_report_time.isoformat() if gl.last_report_time else None
@@ -77,14 +77,15 @@ async def poll_once(bot: Bot) -> None:
                 eld_disconnect_time=disconnect_time,
                 speed=gm.speed,
                 location=location,
+                vehicle_id=str(gm.vehicle_id) if gm.vehicle_id is not None else None,
+                lat=gm.latitude,
+                lon=gm.longitude,
             )
             await _send_alert(bot, event)
 
-    # Auto-resolve events that are no longer anomalous.
-    for active in await store.get_active_events():
-        if active.unit_number not in flagged_now:
-            await store.resolve_event(active.id)
-            logger.info("Resolved anomaly for vehicle %s", active.unit_number)
+    # NOTE: resolution is intentionally NOT done here. A disconnected truck that
+    # simply stops would drop out of the moving set and be wrongly resolved. The
+    # 2-min tracker owns resolution — it resolves only when the ELD reconnects.
 
 
 # Re-log a still-failing identical error only once every N cycles, so a

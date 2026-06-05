@@ -39,17 +39,42 @@ def _fmt_speed(speed: Optional[float]) -> str:
     return f"{speed:.0f} mph" if speed is not None else "unknown"
 
 
+def _driver_suffix(driver: Optional[str]) -> str:
+    return f" — {escape(driver)}" if driver else ""
+
+
 def format_alert(event: AnomalyEvent) -> str:
     """The 🚨 alert sent when a new anomaly is detected."""
-    driver = f" — driver {escape(event.driver)}" if event.driver else ""
     return (
         "🚨 <b>ELD DISCONNECTION ANOMALY</b>\n\n"
-        f"<b>Vehicle:</b> {escape(event.unit_number)}{driver}\n"
-        f"<b>Last known location:</b> {escape(event.last_location or 'unknown')}\n"
+        f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
+        f"<b>Current coordinates:</b> <code>{escape(event.last_location or 'unknown')}</code>\n"
         f"<b>Current speed:</b> {_fmt_speed(event.last_speed)}\n"
         f"<b>ELD disconnected at:</b> {_fmt_time(event.eld_disconnect_time)}\n"
         f"<b>Anomaly duration:</b> {human_duration(event.duration_seconds())}\n\n"
         "<i>Disconnected on GreenLight ELD but still moving on GoMotive.</i>"
+    )
+
+
+def format_stopped(event: AnomalyEvent, coords: str) -> str:
+    """Sent once when a disconnected unit pulls over / stops moving."""
+    return (
+        "⏸ <b>DISCONNECTED UNIT STOPPED</b>\n\n"
+        f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
+        f"<b>Stopped at:</b> <code>{escape(coords)}</code>\n"
+        f"<b>Disconnected for:</b> {human_duration(event.duration_seconds())}\n\n"
+        "<i>No movement on GoMotive since the last check, ELD still disconnected.</i>"
+    )
+
+
+def format_reminder(event: AnomalyEvent) -> str:
+    """Periodic reminder that a unit is still disconnected."""
+    return (
+        "🚨 <b>STILL DISCONNECTED</b>\n\n"
+        f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
+        f"<b>Current coordinates:</b> <code>{escape(event.last_location or 'unknown')}</code>\n"
+        f"<b>Current speed:</b> {_fmt_speed(event.last_speed)}\n"
+        f"<b>Anomaly duration:</b> {human_duration(event.duration_seconds())}"
     )
 
 
