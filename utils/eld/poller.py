@@ -77,7 +77,7 @@ async def poll_once(bot: Bot) -> None:
                 eld_disconnect_time=disconnect_time,
                 speed=gm.speed,
                 location=location,
-                vehicle_id=str(gm.vehicle_id) if gm.vehicle_id is not None else None,
+                motive_vehicle_id=str(gm.vehicle_id) if gm.vehicle_id is not None else None,
                 lat=gm.latitude,
                 lon=gm.longitude,
             )

@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS events (
     last_location       TEXT,
     resolved            INTEGER          NOT NULL DEFAULT 0,
     resolved_at         TEXT,
-    vehicle_id          TEXT,
+    motive_vehicle_id   TEXT,
     last_lat            DOUBLE PRECISION,
     last_lon            DOUBLE PRECISION,
     last_alert_at       TEXT,
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS events (
     last_location       TEXT,
     resolved            INTEGER NOT NULL DEFAULT 0,
     resolved_at         TEXT,
-    vehicle_id          TEXT,
+    motive_vehicle_id   TEXT,
     last_lat            DOUBLE PRECISION,
     last_lon            DOUBLE PRECISION,
     last_alert_at       TEXT,
@@ -74,7 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 # Columns added after the first release. CREATE TABLE above only covers fresh
 # installs, so init_db also applies these to a pre-existing table, idempotently.
 _MIGRATIONS = [
-    ("vehicle_id", "TEXT"),
+    ("motive_vehicle_id", "TEXT"),
     ("last_lat", "DOUBLE PRECISION"),
     ("last_lon", "DOUBLE PRECISION"),
     ("last_alert_at", "TEXT"),
@@ -96,7 +96,7 @@ class AnomalyEvent:
     last_location: Optional[str]
     resolved: int
     resolved_at: Optional[str]
-    vehicle_id: Optional[str] = None
+    motive_vehicle_id: Optional[str] = None
     last_lat: Optional[float] = None
     last_lon: Optional[float] = None
     last_alert_at: Optional[str] = None
@@ -157,6 +157,16 @@ async def init_db() -> None:
             )
         async with _pool.acquire() as conn:
             await conn.execute(_SCHEMA_PG)
+            cols = {
+                r["column_name"] for r in await conn.fetch(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'events'"
+                )
+            }
+            if "vehicle_id" in cols and "motive_vehicle_id" not in cols:
+                await conn.execute(
+                    "ALTER TABLE events RENAME COLUMN vehicle_id TO motive_vehicle_id"
+                )
             for name, ddl in _MIGRATIONS:
                 await conn.execute(
                     f"ALTER TABLE events ADD COLUMN IF NOT EXISTS {name} {ddl}"
@@ -170,6 +180,11 @@ async def init_db() -> None:
             await db.executescript(_SCHEMA_SQLITE)
             cur = await db.execute("PRAGMA table_info(events)")
             existing = {row[1] for row in await cur.fetchall()}
+            if "vehicle_id" in existing and "motive_vehicle_id" not in existing:
+                await db.execute(
+                    "ALTER TABLE events RENAME COLUMN vehicle_id TO motive_vehicle_id"
+                )
+                existing.add("motive_vehicle_id")
             for name, ddl in _MIGRATIONS:
                 if name not in existing:
                     await db.execute(f"ALTER TABLE events ADD COLUMN {name} {ddl}")
@@ -255,7 +270,7 @@ async def open_event(
     eld_disconnect_time: Optional[str],
     speed: Optional[float],
     location: Optional[str],
-    vehicle_id: Optional[str] = None,
+    motive_vehicle_id: Optional[str] = None,
     lat: Optional[float] = None,
     lon: Optional[float] = None,
 ) -> AnomalyEvent:
@@ -265,11 +280,11 @@ async def open_event(
     now = datetime.utcnow().isoformat(timespec="seconds")
     event_id = await _insert_returning_id(
         "INSERT INTO events (unit_number, vin, driver, eld_disconnect_time, "
-        "first_detected, last_seen, last_speed, last_location, vehicle_id, "
+        "first_detected, last_seen, last_speed, last_location, motive_vehicle_id, "
         "last_lat, last_lon, last_alert_at) "
         "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         unit_number, vin, driver, eld_disconnect_time, now, now, speed, location,
-        vehicle_id, lat, lon, now,
+        motive_vehicle_id, lat, lon, now,
     )
     row = await _fetchrow("SELECT * FROM events WHERE id = $1", event_id)
     return _row_to_event(row)

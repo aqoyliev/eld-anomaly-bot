@@ -62,7 +62,7 @@ async def track_once(bot: Bot) -> None:
         return
 
     # Targeted GoMotive movement for just the flagged units + GreenLight freshness.
-    ids = [e.vehicle_id for e in events if e.vehicle_id]
+    ids = [e.motive_vehicle_id for e in events if e.motive_vehicle_id]
     gm_map = await gomotive.fetch_by_ids(ids) if ids else {}
     gl_map = await greenlight.fetch_vehicles([e.unit_number for e in events])
     now = datetime.utcnow()
@@ -77,7 +77,7 @@ async def track_once(bot: Bot) -> None:
             logger.info("Tracker: %s ELD reconnected — resolved.", e.unit_number)
             continue
 
-        gm = gm_map.get(e.vehicle_id) if e.vehicle_id else None
+        gm = gm_map.get(e.motive_vehicle_id) if e.motive_vehicle_id else None
 
         # 2) Stop detection: compare this position to the previous check's.
         if (
