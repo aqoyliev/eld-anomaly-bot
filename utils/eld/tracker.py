@@ -88,7 +88,9 @@ async def track_once(bot: Bot) -> None:
             and e.last_lon is not None
         ):
             moved_mi = _haversine_mi(e.last_lat, e.last_lon, gm.latitude, gm.longitude)
-            slow = gm.speed is not None and gm.speed <= config.STOP_SPEED_MPH
+            # Motive reports speed: null for a parked vehicle, so null counts as
+            # stopped (the displacement check guards against a null-but-moving read).
+            slow = gm.speed is None or gm.speed <= config.STOP_SPEED_MPH
             stopped = moved_mi < config.STOP_DISPLACEMENT_MI and slow
             if stopped and not e.stop_notified:
                 await _notify(bot, format_stopped(e, gm.coordinates_label))

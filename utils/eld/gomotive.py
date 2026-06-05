@@ -33,6 +33,9 @@ KPH_TO_MPH = 0.621371
 # At page_size=50 this allows up to 10,000 vehicles.
 _MAX_PAGES = 200
 
+# The vehicle_locations endpoint caps vehicle_ids[] at 100 per request.
+_MAX_IDS_PER_CALL = 100
+
 
 @dataclass
 class GoMotiveVehicle:
@@ -192,7 +195,8 @@ async def fetch_by_ids(vehicle_ids: List[str]) -> Dict[str, GoMotiveVehicle]:
     handful of disconnected units instead of re-paging the whole fleet.
 
     v1 is used because it honours the ``vehicle_ids[]`` filter (v3 ignores it)
-    and reports speed in mph directly.
+    and reports speed in mph directly. The endpoint caps ``vehicle_ids[]`` at
+    100 per call, so ids are requested in chunks of 100.
     """
     ids = [str(v) for v in vehicle_ids if v]
     if not ids or not config.GOMOTIVE_TOKEN:
@@ -204,21 +208,23 @@ async def fetch_by_ids(vehicle_ids: List[str]) -> Dict[str, GoMotiveVehicle]:
         "X-Metric-Units": "false",
     }
     url = f"{config.GOMOTIVE_BASE_URL.rstrip('/')}/v1/vehicle_locations"
-    # Repeated vehicle_ids[] params + a page big enough for all flagged units.
-    params = [("vehicle_ids[]", vid) for vid in ids]
-    params.append(("per_page", str(max(len(ids), 50))))
 
     out: Dict[str, GoMotiveVehicle] = {}
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url, headers=headers, params=params) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                raise RuntimeError(f"GoMotive fetch_by_ids HTTP {resp.status}: {body}")
-            data = await resp.json()
-
-    for record in data.get("vehicles") or []:
-        v = _parse_vehicle(record, "v1")
-        if v is not None and v.vehicle_id is not None:
-            out[str(v.vehicle_id)] = v
+        for start in range(0, len(ids), _MAX_IDS_PER_CALL):
+            chunk = ids[start:start + _MAX_IDS_PER_CALL]
+            params = [("vehicle_ids[]", vid) for vid in chunk]
+            params.append(("per_page", str(len(chunk))))
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise RuntimeError(
+                        f"GoMotive fetch_by_ids HTTP {resp.status}: {body}"
+                    )
+                data = await resp.json()
+            for record in data.get("vehicles") or []:
+                v = _parse_vehicle(record, "v1")
+                if v is not None and v.vehicle_id is not None:
+                    out[str(v.vehicle_id)] = v
     return out
