@@ -24,7 +24,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from data import config
 from . import gomotive, greenlight, store
-from .formatting import format_reminder, format_stopped
+from .formatting import format_reconnected, format_reminder, format_stopped
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,8 @@ async def track_once(bot: Bot) -> None:
             gl, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
         ):
             await store.resolve_event(e.id)
+            # All-clear goes out even if reminders were muted / the unit stopped.
+            await _notify(bot, format_reconnected(e))
             logger.info("Tracker: %s ELD reconnected — resolved.", e.unit_number)
             continue
 

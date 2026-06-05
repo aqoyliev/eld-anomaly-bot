@@ -78,6 +78,15 @@ def format_reminder(event: AnomalyEvent) -> str:
     )
 
 
+def format_reconnected(event: AnomalyEvent) -> str:
+    """The all-clear: sent when a unit's ELD comes back online (resolved)."""
+    return (
+        "✅ <b>ELD RECONNECTED</b>\n\n"
+        f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
+        f"<b>Was disconnected for:</b> {human_duration(event.duration_seconds())}"
+    )
+
+
 def format_status_line(event: AnomalyEvent) -> str:
     return (
         f"🔴 <b>{escape(event.unit_number)}</b> — "
