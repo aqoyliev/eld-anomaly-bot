@@ -63,7 +63,28 @@ python app.py
 ```
 
 On start the bot registers its commands, notifies admins, and launches the
-5-minute anomaly poller.
+5-minute anomaly poller plus the 2-minute disconnected-unit tracker.
+
+## Deploy to Railway
+
+The bot is a long-polling **worker** (no web port). The repo is deploy-ready:
+
+- `Procfile` → `worker: python app.py`
+- `runtime.txt` / `.python-version` → pin **Python 3.11** (aiogram 2.x needs <3.12)
+
+Steps:
+
+1. Create a Railway project from this GitHub repo.
+2. Add the **PostgreSQL** plugin. Railway injects `DATABASE_URL`, and the bot
+   uses Postgres automatically (no `DATABASE_URL` → it falls back to SQLite).
+   The schema is created/migrated on first boot.
+3. Set service **Variables**: `BOT_TOKEN`, `ADMINS`, `GREENLIGHT_TOKEN`,
+   `GOMOTIVE_TOKEN`, `ALERT_CHAT_ID` (plus any tuning overrides from
+   `.env.example`). `DATABASE_URL` comes from the Postgres plugin.
+4. Deploy — the worker runs `python app.py`.
+
+> **One instance per `BOT_TOKEN`.** Telegram allows a single long-poller, so
+> don't run Railway and a local copy at the same time on the same token.
 
 ## Notes
 

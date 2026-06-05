@@ -99,7 +99,10 @@ All settings live in `.env` (gitignored, never committed):
 | `POLL_INTERVAL`          | `300`                                            | Seconds between poll cycles |
 | `ELD_STALE_THRESHOLD`    | `600`                                            | Seconds before a GreenLight report counts as disconnected |
 | `MOVING_SPEED_THRESHOLD` | `0`                                              | mph above which a vehicle is "moving" |
-| `DB_PATH`                | `db.sqlite3`                                     | SQLite database file |
+| `DATABASE_URL`           | — (unset)                                        | Postgres DSN. If set, the bot uses PostgreSQL (asyncpg); Railway's Postgres plugin injects this. Unset → SQLite. |
+| `DB_PATH`                | `db.sqlite3`                                     | SQLite database file (used when `DATABASE_URL` is unset) |
+
+Deploying to Railway? See **[SETUP.md → Deploy to Railway](SETUP.md#deploy-to-railway)**.
 
 ## Project structure
 
