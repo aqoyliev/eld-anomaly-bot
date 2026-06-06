@@ -1,16 +1,10 @@
 from aiogram import types
 from aiogram.dispatcher.filters import Command
 
-from data import config
+from filters.is_admin import is_admin_user
 from loader import dp
 from utils.eld import store
 from utils.eld.formatting import format_status_line
-
-
-def _is_admin(message: types.Message) -> bool:
-    # config.ADMINS holds Telegram user ids as strings (env.list); from_user.id
-    # is an int, so compare via str(). from_user can be None (channel posts).
-    return bool(message.from_user) and str(message.from_user.id) in config.ADMINS
 
 
 @dp.message_handler(Command("status"))
@@ -27,7 +21,7 @@ async def show_status(message: types.Message):
         await message.answer("\n".join(lines))
         return
 
-    if _is_admin(message):
+    if is_admin_user(message.from_user):
         # Unbound chat (e.g. an admin DM): aggregate across all active companies.
         blocks = []
         for c in await store.active_companies():

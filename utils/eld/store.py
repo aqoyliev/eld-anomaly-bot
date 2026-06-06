@@ -103,6 +103,16 @@ _COMPANY_INDEX = (
     "ON events (company_id, unit_number, resolved)"
 )
 
+# Enforce the one-chat-one-company invariant at the DB level (a chat maps to a
+# single company; /bindhere also guards this in app code). Partial so multiple
+# unbound companies (alert_chat_id IS NULL) are still allowed. Same syntax on
+# Postgres and SQLite. Best-effort: if a legacy DB already holds a duplicate
+# binding, creation is skipped with a warning rather than failing startup.
+_COMPANY_CHAT_UNIQUE_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_alert_chat "
+    "ON companies (alert_chat_id) WHERE alert_chat_id IS NOT NULL"
+)
+
 # Columns added after the first release. CREATE TABLE above only covers fresh
 # installs, so init_db also applies these to a pre-existing table, idempotently.
 _MIGRATIONS = [
@@ -218,6 +228,14 @@ async def init_db() -> None:
                     f"ALTER TABLE events ADD COLUMN IF NOT EXISTS {name} {ddl}"
                 )
             await conn.execute(_COMPANY_INDEX)
+            try:
+                await conn.execute(_COMPANY_CHAT_UNIQUE_INDEX)
+            except Exception:
+                logger.warning(
+                    "Could not create unique index on companies.alert_chat_id "
+                    "(a duplicate binding may already exist); skipping.",
+                    exc_info=True,
+                )
     else:
         import aiosqlite
 
@@ -236,6 +254,14 @@ async def init_db() -> None:
                 if name not in existing:
                     await db.execute(f"ALTER TABLE events ADD COLUMN {name} {ddl}")
             await db.execute(_COMPANY_INDEX)
+            try:
+                await db.execute(_COMPANY_CHAT_UNIQUE_INDEX)
+            except Exception:
+                logger.warning(
+                    "Could not create unique index on companies.alert_chat_id "
+                    "(a duplicate binding may already exist); skipping.",
+                    exc_info=True,
+                )
             await db.commit()
 
     await _seed_default_company()
