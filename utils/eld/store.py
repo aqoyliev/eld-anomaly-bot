@@ -26,6 +26,16 @@ from data import config
 # --- schema (one per dialect; only the id/real types differ) -----------------
 
 _SCHEMA_PG = """
+CREATE TABLE IF NOT EXISTS companies (
+    id                  BIGSERIAL PRIMARY KEY,
+    name                TEXT             NOT NULL UNIQUE,
+    gomotive_token      TEXT,
+    greenlight_token    TEXT,
+    greenlight_base_url TEXT,
+    alert_chat_id       TEXT,
+    active              INTEGER          NOT NULL DEFAULT 1,
+    created_at          TEXT
+);
 CREATE TABLE IF NOT EXISTS events (
     id                  BIGSERIAL PRIMARY KEY,
     unit_number         TEXT             NOT NULL,
@@ -43,12 +53,23 @@ CREATE TABLE IF NOT EXISTS events (
     last_lon            DOUBLE PRECISION,
     last_alert_at       TEXT,
     stop_notified       INTEGER          NOT NULL DEFAULT 0,
-    reminders_muted     INTEGER          NOT NULL DEFAULT 0
+    reminders_muted     INTEGER          NOT NULL DEFAULT 0,
+    company_id          INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
 
 _SCHEMA_SQLITE = """
+CREATE TABLE IF NOT EXISTS companies (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT    NOT NULL UNIQUE,
+    gomotive_token      TEXT,
+    greenlight_token    TEXT,
+    greenlight_base_url TEXT,
+    alert_chat_id       TEXT,
+    active              INTEGER NOT NULL DEFAULT 1,
+    created_at          TEXT
+);
 CREATE TABLE IF NOT EXISTS events (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     unit_number         TEXT    NOT NULL,
@@ -66,10 +87,18 @@ CREATE TABLE IF NOT EXISTS events (
     last_lon            DOUBLE PRECISION,
     last_alert_at       TEXT,
     stop_notified       INTEGER NOT NULL DEFAULT 0,
-    reminders_muted     INTEGER NOT NULL DEFAULT 0
+    reminders_muted     INTEGER NOT NULL DEFAULT 0,
+    company_id          INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
+
+# Created after migrations run, since on a legacy DB ``company_id`` only exists
+# once the migration loop has added it.
+_COMPANY_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_events_company_active "
+    "ON events (company_id, unit_number, resolved)"
+)
 
 # Columns added after the first release. CREATE TABLE above only covers fresh
 # installs, so init_db also applies these to a pre-existing table, idempotently.
@@ -80,7 +109,20 @@ _MIGRATIONS = [
     ("last_alert_at", "TEXT"),
     ("stop_notified", "INTEGER NOT NULL DEFAULT 0"),
     ("reminders_muted", "INTEGER NOT NULL DEFAULT 0"),
+    ("company_id", "INTEGER"),
 ]
+
+
+@dataclass
+class Company:
+    id: int
+    name: str
+    gomotive_token: Optional[str] = None
+    greenlight_token: Optional[str] = None
+    greenlight_base_url: Optional[str] = None
+    alert_chat_id: Optional[str] = None
+    active: int = 1
+    created_at: Optional[str] = None
 
 
 @dataclass
@@ -102,6 +144,7 @@ class AnomalyEvent:
     last_alert_at: Optional[str] = None
     stop_notified: int = 0
     reminders_muted: int = 0
+    company_id: Optional[int] = None
 
     @property
     def disconnect_dt(self) -> Optional[datetime]:
@@ -171,6 +214,7 @@ async def init_db() -> None:
                 await conn.execute(
                     f"ALTER TABLE events ADD COLUMN IF NOT EXISTS {name} {ddl}"
                 )
+            await conn.execute(_COMPANY_INDEX)
     else:
         import aiosqlite
 
@@ -188,7 +232,35 @@ async def init_db() -> None:
             for name, ddl in _MIGRATIONS:
                 if name not in existing:
                     await db.execute(f"ALTER TABLE events ADD COLUMN {name} {ddl}")
+            await db.execute(_COMPANY_INDEX)
             await db.commit()
+
+    await _seed_default_company()
+
+
+async def _seed_default_company() -> None:
+    """One-time adoption of the pre-multi-company production setup. If no company
+    exists yet AND the legacy env vars are configured, create a single "default"
+    company from ``config.*`` and stamp every company-less event with its id. Only
+    fires when the companies table is empty, so the live company is adopted exactly
+    once and never re-seeded; backend-agnostic (uses the generic helpers)."""
+    existing = await _fetchrow("SELECT id FROM companies LIMIT 1")
+    if existing is not None:
+        return
+    if not (config.GOMOTIVE_TOKEN and config.GREENLIGHT_TOKEN):
+        return  # nothing to seed from (fresh install with no legacy config)
+
+    company = await add_company(
+        name="default",
+        gomotive_token=config.GOMOTIVE_TOKEN,
+        greenlight_token=config.GREENLIGHT_TOKEN,
+        greenlight_base_url=config.GREENLIGHT_BASE_URL,
+    )
+    if config.ALERT_CHAT_ID:
+        await bind_company_chat(company.id, config.ALERT_CHAT_ID)
+    await _execute(
+        "UPDATE events SET company_id = $1 WHERE company_id IS NULL", company.id
+    )
 
 
 async def close() -> None:
@@ -251,19 +323,99 @@ def _row_to_event(row: dict) -> AnomalyEvent:
     return AnomalyEvent(**row)
 
 
+def _row_to_company(row: dict) -> Company:
+    return Company(**row)
+
+
+# --- companies ---------------------------------------------------------------
+
+async def add_company(
+    *,
+    name: str,
+    gomotive_token: Optional[str],
+    greenlight_token: Optional[str],
+    greenlight_base_url: Optional[str] = None,
+) -> Company:
+    """Create a company and return it. ``alert_chat_id`` is left NULL — bind it to
+    a Telegram group with :func:`bind_company_chat` before it will be polled."""
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    company_id = await _insert_returning_id(
+        "INSERT INTO companies (name, gomotive_token, greenlight_token, "
+        "greenlight_base_url, created_at) VALUES ($1, $2, $3, $4, $5)",
+        name, gomotive_token, greenlight_token, greenlight_base_url, now,
+    )
+    row = await _fetchrow("SELECT * FROM companies WHERE id = $1", company_id)
+    return _row_to_company(row)
+
+
+async def bind_company_chat(company_id: int, chat_id) -> None:
+    """Bind a company to the Telegram chat that receives its alerts. Stored as
+    text so it compares cleanly against ``str(message.chat.id)``. Pass
+    ``chat_id=None`` to clear the binding (unbind)."""
+    value = None if chat_id is None else str(chat_id)
+    await _execute(
+        "UPDATE companies SET alert_chat_id = $1 WHERE id = $2",
+        value, company_id,
+    )
+
+
+async def set_company_active(company_id: int, value: int) -> None:
+    await _execute(
+        "UPDATE companies SET active = $1 WHERE id = $2", value, company_id
+    )
+
+
+async def get_company(company_id: int) -> Optional[Company]:
+    row = await _fetchrow("SELECT * FROM companies WHERE id = $1", company_id)
+    return _row_to_company(row) if row else None
+
+
+async def get_company_by_name(name: str) -> Optional[Company]:
+    row = await _fetchrow("SELECT * FROM companies WHERE name = $1", name)
+    return _row_to_company(row) if row else None
+
+
+async def get_company_by_chat(chat_id) -> Optional[Company]:
+    row = await _fetchrow(
+        "SELECT * FROM companies WHERE alert_chat_id = $1", str(chat_id)
+    )
+    return _row_to_company(row) if row else None
+
+
+async def list_companies(active_only: bool = False) -> List[Company]:
+    sql = "SELECT * FROM companies"
+    if active_only:
+        sql += " WHERE active = 1"
+    sql += " ORDER BY id"
+    rows = await _fetch(sql)
+    return [_row_to_company(r) for r in rows]
+
+
+async def active_companies() -> List[Company]:
+    """Companies ready to poll: active and bound to an alert chat."""
+    rows = await _fetch(
+        "SELECT * FROM companies WHERE active = 1 AND alert_chat_id IS NOT NULL "
+        "ORDER BY id"
+    )
+    return [_row_to_company(r) for r in rows]
+
+
 # --- public API (same names/semantics as the old sync store) -----------------
 
-async def get_active_event(unit_number: str) -> Optional[AnomalyEvent]:
+async def get_active_event(
+    company_id: int, unit_number: str
+) -> Optional[AnomalyEvent]:
     row = await _fetchrow(
-        "SELECT * FROM events WHERE unit_number = $1 AND resolved = 0 "
-        "ORDER BY id DESC LIMIT 1",
-        unit_number,
+        "SELECT * FROM events WHERE company_id = $1 AND unit_number = $2 "
+        "AND resolved = 0 ORDER BY id DESC LIMIT 1",
+        company_id, unit_number,
     )
     return _row_to_event(row) if row else None
 
 
 async def open_event(
     *,
+    company_id: int,
     unit_number: str,
     vin: Optional[str],
     driver: Optional[str],
@@ -279,12 +431,12 @@ async def open_event(
     alert immediately; the 30-min reminder clock counts from there."""
     now = datetime.utcnow().isoformat(timespec="seconds")
     event_id = await _insert_returning_id(
-        "INSERT INTO events (unit_number, vin, driver, eld_disconnect_time, "
-        "first_detected, last_seen, last_speed, last_location, motive_vehicle_id, "
-        "last_lat, last_lon, last_alert_at) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-        unit_number, vin, driver, eld_disconnect_time, now, now, speed, location,
-        motive_vehicle_id, lat, lon, now,
+        "INSERT INTO events (company_id, unit_number, vin, driver, "
+        "eld_disconnect_time, first_detected, last_seen, last_speed, last_location, "
+        "motive_vehicle_id, last_lat, last_lon, last_alert_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        company_id, unit_number, vin, driver, eld_disconnect_time, now, now, speed,
+        location, motive_vehicle_id, lat, lon, now,
     )
     row = await _fetchrow("SELECT * FROM events WHERE id = $1", event_id)
     return _row_to_event(row)
@@ -333,20 +485,24 @@ async def resolve_event(event_id: int) -> None:
     )
 
 
-async def get_active_events() -> List[AnomalyEvent]:
+async def get_active_events(company_id: int) -> List[AnomalyEvent]:
     rows = await _fetch(
-        "SELECT * FROM events WHERE resolved = 0 ORDER BY first_detected DESC"
+        "SELECT * FROM events WHERE company_id = $1 AND resolved = 0 "
+        "ORDER BY first_detected DESC",
+        company_id,
     )
     return [_row_to_event(r) for r in rows]
 
 
-async def active_unit_numbers() -> set:
-    return {e.unit_number for e in await get_active_events()}
+async def active_unit_numbers(company_id: int) -> set:
+    return {e.unit_number for e in await get_active_events(company_id)}
 
 
-async def get_recent_events(limit: int = 20) -> List[AnomalyEvent]:
+async def get_recent_events(company_id: int, limit: int = 20) -> List[AnomalyEvent]:
     rows = await _fetch(
-        "SELECT * FROM events ORDER BY first_detected DESC LIMIT $1", limit
+        "SELECT * FROM events WHERE company_id = $1 "
+        "ORDER BY first_detected DESC LIMIT $2",
+        company_id, limit,
     )
     return [_row_to_event(r) for r in rows]
 

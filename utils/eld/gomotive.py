@@ -23,8 +23,6 @@ from typing import Dict, List, Optional
 
 import aiohttp
 
-from data import config
-
 logger = logging.getLogger(__name__)
 
 KPH_TO_MPH = 0.621371
@@ -65,20 +63,22 @@ def _parse_time(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-async def _fetch_raw(version: str, page_size: int = 50) -> List[dict]:
+async def _fetch_raw(
+    version: str, token: str, base_url: str, page_size: int = 50
+) -> List[dict]:
     """Page through /{version}/vehicle_locations and return the raw ``vehicles``
     items. Returns [] (and logs) if the token is missing or the call fails, so a
     failure on one version never blocks the other."""
-    if not config.GOMOTIVE_TOKEN:
+    if not token:
         logger.warning("GoMotive token not configured; skipping GoMotive poll.")
         return []
 
     headers = {
         "accept": "application/json",
-        "X-Api-Key": config.GOMOTIVE_TOKEN,
+        "X-Api-Key": token,
         "X-Metric-Units": "false",  # ask for imperial; we also convert kph ourselves
     }
-    url = f"{config.GOMOTIVE_BASE_URL.rstrip('/')}/{version}/vehicle_locations"
+    url = f"{base_url.rstrip('/')}/{version}/vehicle_locations"
     timeout = aiohttp.ClientTimeout(total=30)
 
     # The fleet is live, so pagination.total can change between page requests.
@@ -149,12 +149,14 @@ def _parse_vehicle(record: dict, version: str) -> Optional[GoMotiveVehicle]:
     )
 
 
-async def _fetch_version(version: str) -> Dict[str, GoMotiveVehicle]:
+async def _fetch_version(
+    version: str, token: str, base_url: str
+) -> Dict[str, GoMotiveVehicle]:
     """Return {unit_number: vehicle} for one API version. Swallows errors so one
     version failing doesn't break the other."""
     out: Dict[str, GoMotiveVehicle] = {}
     try:
-        records = await _fetch_raw(version)
+        records = await _fetch_raw(version, token, base_url)
     except Exception:
         logger.exception("GoMotive %s fetch failed", version)
         return out
@@ -165,15 +167,17 @@ async def _fetch_version(version: str) -> Dict[str, GoMotiveVehicle]:
     return out
 
 
-async def fetch_moving_vehicles(threshold_mph: float = 0.0) -> Dict[str, GoMotiveVehicle]:
+async def fetch_moving_vehicles(
+    token: str, base_url: str, threshold_mph: float = 0.0
+) -> Dict[str, GoMotiveVehicle]:
     """Return {unit_number: vehicle} for vehicles moving above the threshold.
 
     Coverage = v3 with v1 fallback: take v1 as the base, then let v3 override
     (v3 is the preferred Gateway feed), so vehicles only present in one feed are
     still included.
     """
-    v1 = await _fetch_version("v1")
-    v3 = await _fetch_version("v3")
+    v1 = await _fetch_version("v1", token, base_url)
+    v3 = await _fetch_version("v3", token, base_url)
 
     merged: Dict[str, GoMotiveVehicle] = dict(v1)
     merged.update(v3)  # v3 wins where both have the vehicle
@@ -189,7 +193,9 @@ async def fetch_moving_vehicles(threshold_mph: float = 0.0) -> Dict[str, GoMotiv
     }
 
 
-async def fetch_by_ids(vehicle_ids: List[str]) -> Dict[str, GoMotiveVehicle]:
+async def fetch_by_ids(
+    vehicle_ids: List[str], token: str, base_url: str
+) -> Dict[str, GoMotiveVehicle]:
     """Targeted v1 lookup for specific GoMotive vehicle ids, returned as
     {str(id): vehicle}. Used by the 2-min tracker so it re-checks only the
     handful of disconnected units instead of re-paging the whole fleet.
@@ -199,15 +205,15 @@ async def fetch_by_ids(vehicle_ids: List[str]) -> Dict[str, GoMotiveVehicle]:
     100 per call, so ids are requested in chunks of 100.
     """
     ids = [str(v) for v in vehicle_ids if v]
-    if not ids or not config.GOMOTIVE_TOKEN:
+    if not ids or not token:
         return {}
 
     headers = {
         "accept": "application/json",
-        "X-Api-Key": config.GOMOTIVE_TOKEN,
+        "X-Api-Key": token,
         "X-Metric-Units": "false",
     }
-    url = f"{config.GOMOTIVE_BASE_URL.rstrip('/')}/v1/vehicle_locations"
+    url = f"{base_url.rstrip('/')}/v1/vehicle_locations"
 
     out: Dict[str, GoMotiveVehicle] = {}
     timeout = aiohttp.ClientTimeout(total=30)

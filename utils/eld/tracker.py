@@ -46,25 +46,39 @@ def ignore_keyboard(event_id: int) -> InlineKeyboardMarkup:
     )
 
 
-async def _notify(bot: Bot, text: str, reply_markup=None) -> None:
-    if not config.ALERT_CHAT_ID:
-        logger.warning("ALERT_CHAT_ID not set; cannot send tracker notification.")
+async def _notify(
+    bot: Bot, company: store.Company, text: str, reply_markup=None
+) -> None:
+    if not company.alert_chat_id:
+        logger.warning("Company %s has no alert chat; cannot send tracker "
+                       "notification.", company.name)
         return
     try:
-        await bot.send_message(config.ALERT_CHAT_ID, text, reply_markup=reply_markup)
+        await bot.send_message(
+            company.alert_chat_id, text, reply_markup=reply_markup
+        )
     except Exception:
         logger.exception("Failed to send tracker notification")
 
 
-async def track_once(bot: Bot) -> None:
-    events = await store.get_active_events()
+async def track_once(bot: Bot, company: store.Company) -> None:
+    events = await store.get_active_events(company.id)
     if not events:
         return
 
+    gl_base_url = company.greenlight_base_url or config.GREENLIGHT_BASE_URL
+
     # Targeted GoMotive movement for just the flagged units + GreenLight freshness.
     ids = [e.motive_vehicle_id for e in events if e.motive_vehicle_id]
-    gm_map = await gomotive.fetch_by_ids(ids) if ids else {}
-    gl_map = await greenlight.fetch_vehicles([e.unit_number for e in events])
+    gm_map = (
+        await gomotive.fetch_by_ids(
+            ids, company.gomotive_token, config.GOMOTIVE_BASE_URL
+        )
+        if ids else {}
+    )
+    gl_map = await greenlight.fetch_vehicles(
+        [e.unit_number for e in events], company.greenlight_token, gl_base_url
+    )
     now = datetime.utcnow()
 
     for e in events:
@@ -75,8 +89,9 @@ async def track_once(bot: Bot) -> None:
         ):
             await store.resolve_event(e.id)
             # All-clear goes out even if reminders were muted / the unit stopped.
-            await _notify(bot, format_reconnected(e))
-            logger.info("Tracker: %s ELD reconnected — resolved.", e.unit_number)
+            await _notify(bot, company, format_reconnected(e, company_name=company.name))
+            logger.info("Tracker[%s]: %s ELD reconnected — resolved.",
+                        company.name, e.unit_number)
             continue
 
         gm = gm_map.get(e.motive_vehicle_id) if e.motive_vehicle_id else None
@@ -95,9 +110,13 @@ async def track_once(bot: Bot) -> None:
             slow = gm.speed is None or gm.speed <= config.STOP_SPEED_MPH
             stopped = moved_mi < config.STOP_DISPLACEMENT_MI and slow
             if stopped and not e.stop_notified:
-                await _notify(bot, format_stopped(e, gm.coordinates_label))
+                await _notify(
+                    bot, company,
+                    format_stopped(e, gm.coordinates_label, company_name=company.name),
+                )
                 await store.set_stop_notified(e.id, 1)
-                logger.info("Tracker: %s STOPPED (moved %.3f mi).", e.unit_number, moved_mi)
+                logger.info("Tracker[%s]: %s STOPPED (moved %.3f mi).",
+                            company.name, e.unit_number, moved_mi)
             elif not stopped and e.stop_notified:
                 await store.set_stop_notified(e.id, 0)  # moving again
 
@@ -112,16 +131,22 @@ async def track_once(bot: Bot) -> None:
         if not e.reminders_muted and e.last_alert_at:
             since = (now - datetime.fromisoformat(e.last_alert_at)).total_seconds()
             if since >= config.REMINDER_INTERVAL:
-                latest = await store.get_active_event(e.unit_number) or e
-                await _notify(bot, format_reminder(latest), reply_markup=ignore_keyboard(e.id))
+                latest = await store.get_active_event(company.id, e.unit_number) or e
+                await _notify(
+                    bot, company,
+                    format_reminder(latest, company_name=company.name),
+                    reply_markup=ignore_keyboard(e.id),
+                )
                 await store.mark_alerted(e.id)
 
 
 async def run_tracker(bot: Bot) -> None:
     logger.info("ELD tracker started (interval=%ds).", config.TRACK_INTERVAL)
     while True:
-        try:
-            await track_once(bot)
-        except Exception:
-            logger.exception("Error during ELD tracker cycle")
+        for company in await store.active_companies():
+            try:
+                await track_once(bot, company)
+            except Exception:
+                logger.exception("Error during ELD tracker cycle for %s",
+                                 company.name)
         await asyncio.sleep(config.TRACK_INTERVAL)

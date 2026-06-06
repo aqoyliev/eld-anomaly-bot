@@ -43,10 +43,17 @@ def _driver_suffix(driver: Optional[str]) -> str:
     return f" — {escape(driver)}" if driver else ""
 
 
-def format_alert(event: AnomalyEvent) -> str:
+def _company_line(company_name: Optional[str]) -> str:
+    """Header line naming the company, so an operator watching several alert
+    groups can tell them apart. Empty (no extra line) when not provided."""
+    return f"<b>Company:</b> {escape(company_name)}\n" if company_name else ""
+
+
+def format_alert(event: AnomalyEvent, company_name: Optional[str] = None) -> str:
     """The 🚨 alert sent when a new anomaly is detected."""
     return (
         "🚨 <b>ELD DISCONNECTION ANOMALY</b>\n\n"
+        f"{_company_line(company_name)}"
         f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
         f"<b>Current coordinates:</b> <code>{escape(event.last_location or 'unknown')}</code>\n"
         f"<b>Current speed:</b> {_fmt_speed(event.last_speed)}\n"
@@ -56,10 +63,13 @@ def format_alert(event: AnomalyEvent) -> str:
     )
 
 
-def format_stopped(event: AnomalyEvent, coords: str) -> str:
+def format_stopped(
+    event: AnomalyEvent, coords: str, company_name: Optional[str] = None
+) -> str:
     """Sent once when a disconnected unit pulls over / stops moving."""
     return (
         "⏸ <b>DISCONNECTED UNIT STOPPED</b>\n\n"
+        f"{_company_line(company_name)}"
         f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
         f"<b>Stopped at:</b> <code>{escape(coords)}</code>\n"
         f"<b>Disconnected for:</b> {human_duration(event.duration_seconds())}\n\n"
@@ -67,10 +77,11 @@ def format_stopped(event: AnomalyEvent, coords: str) -> str:
     )
 
 
-def format_reminder(event: AnomalyEvent) -> str:
+def format_reminder(event: AnomalyEvent, company_name: Optional[str] = None) -> str:
     """Periodic reminder that a unit is still disconnected."""
     return (
         "🚨 <b>STILL DISCONNECTED</b>\n\n"
+        f"{_company_line(company_name)}"
         f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
         f"<b>Current coordinates:</b> <code>{escape(event.last_location or 'unknown')}</code>\n"
         f"<b>Current speed:</b> {_fmt_speed(event.last_speed)}\n"
@@ -78,10 +89,13 @@ def format_reminder(event: AnomalyEvent) -> str:
     )
 
 
-def format_reconnected(event: AnomalyEvent) -> str:
+def format_reconnected(
+    event: AnomalyEvent, company_name: Optional[str] = None
+) -> str:
     """The all-clear: sent when a unit's ELD comes back online (resolved)."""
     return (
         "✅ <b>ELD RECONNECTED</b>\n\n"
+        f"{_company_line(company_name)}"
         f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
         f"<b>Was disconnected for:</b> {human_duration(event.duration_seconds())}"
     )

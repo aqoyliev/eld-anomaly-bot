@@ -31,7 +31,16 @@ from utils.eld.greenlight import GreenLightVehicle  # noqa: E402
 async def run(unit: str | None, stale_min: int, twice: bool) -> int:
     await store.init_db()
 
-    moving = await gomotive.fetch_moving_vehicles(config.MOVING_SPEED_THRESHOLD)
+    company = await store.get_company_by_name("default")
+    if company is None:
+        print("No 'default' company found. Set the legacy GOMOTIVE/GREENLIGHT env "
+              "vars (so init_db seeds it) or add one with the /addcompany bot command.")
+        return 1
+
+    moving = await gomotive.fetch_moving_vehicles(
+        company.gomotive_token, config.GOMOTIVE_BASE_URL,
+        threshold_mph=config.MOVING_SPEED_THRESHOLD,
+    )
     if not moving:
         print("No vehicles are moving on GoMotive right now — try again shortly.")
         return 1
@@ -58,7 +67,7 @@ async def run(unit: str | None, stale_min: int, twice: bool) -> int:
         last_report_time=stale_time,
     )
 
-    async def fake_fetch(unit_numbers, concurrency=10):
+    async def fake_fetch(unit_numbers, token=None, base_url=None, concurrency=10):
         # Pretend GreenLight reports the chosen unit as stale; others not found.
         return {u: (mock_vehicle if u == unit else None) for u in unit_numbers}
 
@@ -68,16 +77,16 @@ async def run(unit: str | None, stale_min: int, twice: bool) -> int:
     bot = Bot(token=config.BOT_TOKEN, parse_mode=types.ParseMode.HTML)
     try:
         print("\n-- poll cycle 1 (expect a new alert) --")
-        await poller.poll_once(bot)
+        await poller.poll_once(bot, company)
         if twice:
             print("\n-- poll cycle 2 (expect NO duplicate alert) --")
-            await poller.poll_once(bot)
+            await poller.poll_once(bot, company)
     finally:
         session = await bot.get_session()
         await session.close()
 
     print("\nActive (flagged) events — what /status shows:")
-    for e in await store.get_active_events():
+    for e in await store.get_active_events(company.id):
         print(f"  {e.unit_number}: {e.last_speed} mph @ {e.last_location} "
               f"(disconnected {e.eld_disconnect_time})")
 
