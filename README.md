@@ -56,6 +56,10 @@ Disconnected on GreenLight ELD but still moving on GoMotive.
 | `/start`  | Start the bot                                |
 | `/help`   | Help                                         |
 
+> Regular users can only use the bot **inside a company's group chat**. A direct
+> message from a non-admin is turned away — private chats are reserved for admins
+> (so the admin commands below work in DM).
+
 **Admin-only** (restricted to `ADMINS`):
 
 | Command        | Description                                                    |
