@@ -36,7 +36,10 @@ def _fmt_time(value: Optional[str]) -> str:
 
 
 def _fmt_speed(speed: Optional[float]) -> str:
-    return f"{speed:.0f} mph" if speed is not None else "unknown"
+    # GoMotive (esp. the v1 endpoint the tracker uses) sometimes reports a null
+    # speed for a reading; display that as "0 mph" rather than "unknown". This is
+    # display-only — the raw None value still drives stop detection / movement.
+    return f"{speed:.0f} mph" if speed is not None else "0 mph"
 
 
 def _driver_suffix(driver: Optional[str]) -> str:
