@@ -164,9 +164,15 @@ class AnomalyEvent:
         return _parse(self.eld_disconnect_time)
 
     def duration_seconds(self, now: Optional[datetime] = None) -> int:
-        """Length of the anomaly, from the ELD disconnect time to now (or to
-        resolution if already resolved)."""
-        start = self.disconnect_dt or _parse(self.first_detected)
+        """How long the anomaly has been active, measured from when the bot first
+        detected it (``first_detected``) to now — or to resolution if resolved.
+
+        We count from detection rather than the ELD's last report: an anomaly is
+        only declared once the last report is already older than the stale
+        threshold (ELD_STALE_THRESHOLD), so counting from the report would make
+        every brand-new alert start at 10+ minutes instead of ~0. The real last-
+        report time is still shown separately as "ELD disconnected at"."""
+        start = _parse(self.first_detected) or self.disconnect_dt
         if start is None:
             return 0
         end = _parse(self.resolved_at) if self.resolved else (now or datetime.utcnow())
