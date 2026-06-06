@@ -9,6 +9,8 @@ Commands (restricted to config.ADMINS via the IsAdmin filter):
     /cancel       abort the /addcompany wizard
 """
 
+from html import escape
+
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 
@@ -76,13 +78,13 @@ async def add_name(message: types.Message, state: FSMContext):
         await message.answer("Please send a non-empty name, or /cancel.")
         return
     if await store.get_company_by_name(name) is not None:
-        await message.answer(f"A company named <b>{name}</b> already exists. "
+        await message.answer(f"A company named <b>{escape(name)}</b> already exists. "
                              "Send a different name, or /cancel.")
         return
     await state.update_data(name=name)
     await state.set_state(AddCompany.gomotive_token)
     await message.answer(
-        f"Name: <b>{name}</b> ✅\n\nNow send the <b>GoMotive API token</b>.\n"
+        f"Name: <b>{escape(name)}</b> ✅\n\nNow send the <b>GoMotive API token</b>.\n"
         "<i>I'll delete your message right after reading it.</i>"
     )
 
@@ -149,12 +151,12 @@ async def add_base_url(message: types.Message, state: FSMContext):
         greenlight_base_url=base_url,
     )
     await message.answer(
-        f"✅ Created company <b>{company.name}</b> (id {company.id}).\n"
+        f"✅ Created company <b>{escape(company.name)}</b> (id {company.id}).\n"
         f"  GoMotive: <code>{_mask(company.gomotive_token)}</code>\n"
         f"  GreenLight: <code>{_mask(company.greenlight_token)}</code>\n"
-        f"  Base URL: {company.greenlight_base_url or '(default)'}\n\n"
+        f"  Base URL: {escape(company.greenlight_base_url or '(default)')}\n\n"
         "It won't be polled until an alert chat is linked. Go to its alert group "
-        f"and send:\n<code>/bindhere {company.name}</code>"
+        f"and send:\n<code>/bindhere {escape(company.name)}</code>"
     )
 
 
@@ -165,7 +167,7 @@ async def bind_here(message: types.Message):
     arg = message.get_args().strip()
     if not arg:
         companies = await store.list_companies(active_only=False)
-        names = ", ".join(c.name for c in companies) or "(none yet — /addcompany)"
+        names = ", ".join(escape(c.name) for c in companies) or "(none yet — /addcompany)"
         await message.answer(
             "Usage: <code>/bindhere &lt;company name or id&gt;</code>\n"
             "Run this in the group that should receive that company's alerts.\n\n"
@@ -175,7 +177,7 @@ async def bind_here(message: types.Message):
 
     company = await _resolve(arg)
     if company is None:
-        await message.answer(f"No company found for <b>{arg}</b>.")
+        await message.answer(f"No company found for <b>{escape(arg)}</b>.")
         return
 
     existing = await store.get_company_by_chat(message.chat.id)
@@ -184,15 +186,16 @@ async def bind_here(message: types.Message):
         # isn't left sharing this chat (and silently double-alerting).
         await store.bind_company_chat(existing.id, None)
         await message.answer(
-            f"⚠️ This chat was linked to <b>{existing.name}</b> — unlinking it and "
-            f"re-linking to <b>{company.name}</b>. (<b>{existing.name}</b> now has "
+            f"⚠️ This chat was linked to <b>{escape(existing.name)}</b> — unlinking it "
+            f"and re-linking to <b>{escape(company.name)}</b>. "
+            f"(<b>{escape(existing.name)}</b> now has "
             "no alert chat and won't be polled until you /bindhere it elsewhere.)"
         )
 
     await store.bind_company_chat(company.id, message.chat.id)
     state_note = "" if company.active else " (note: it's deactivated — /activate it to poll)"
     await message.answer(
-        f"✅ Linked this chat (<code>{message.chat.id}</code>) to <b>{company.name}</b>. "
+        f"✅ Linked this chat (<code>{message.chat.id}</code>) to <b>{escape(company.name)}</b>. "
         f"Alerts will arrive here from the next poll cycle.{state_note}"
     )
 
@@ -210,7 +213,7 @@ async def list_companies(message: types.Message):
         polled = "polled" if (c.active and c.alert_chat_id) else "NOT polled"
         chat = f"<code>{c.alert_chat_id}</code>" if c.alert_chat_id else "(unbound)"
         lines.append(
-            f"<b>[{c.id}] {c.name}</b> — {'active' if c.active else 'inactive'}, {polled}\n"
+            f"<b>[{c.id}] {escape(c.name)}</b> — {'active' if c.active else 'inactive'}, {polled}\n"
             f"   GoMotive <code>{_mask(c.gomotive_token)}</code> · "
             f"GreenLight <code>{_mask(c.greenlight_token)}</code> · chat {chat}"
         )
@@ -237,10 +240,10 @@ async def _set_active(message: types.Message, value: int):
         return
     company = await _resolve(arg)
     if company is None:
-        await message.answer(f"No company found for <b>{arg}</b>.")
+        await message.answer(f"No company found for <b>{escape(arg)}</b>.")
         return
     await store.set_company_active(company.id, value)
     await message.answer(
-        f"✅ {'Activated' if value else 'Deactivated'} <b>{company.name}</b>."
+        f"✅ {'Activated' if value else 'Deactivated'} <b>{escape(company.name)}</b>."
         + ("" if value else " It will no longer be polled (history kept).")
     )

@@ -16,12 +16,15 @@ and timezone-agnostic. SQL is written once with asyncpg ``$1`` placeholders and
 translated to ``?`` for SQLite (our queries never repeat or reorder a param).
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
 from data import config
+
+logger = logging.getLogger(__name__)
 
 # --- schema (one per dialect; only the id/real types differ) -----------------
 
@@ -239,21 +242,31 @@ async def init_db() -> None:
 
 
 async def _seed_default_company() -> None:
-    """One-time adoption of the pre-multi-company production setup. If no company
-    exists yet AND the legacy env vars are configured, create a single "default"
-    company from ``config.*`` and stamp every company-less event with its id. Only
-    fires when the companies table is empty, so the live company is adopted exactly
-    once and never re-seeded; backend-agnostic (uses the generic helpers)."""
+    """One-time adoption of the pre-multi-company production setup. Fires only when
+    the companies table is empty, so the live company is adopted exactly once and
+    never re-seeded; backend-agnostic (uses the generic helpers).
+
+    A "default" company is created and every company-less event is stamped with its
+    id when EITHER the legacy token env vars are configured OR a legacy DB already
+    holds events. The second case matters: if an operator upgrades after clearing
+    the now-"seed-only" env vars, we must still adopt the existing rows — otherwise
+    every read query (all scoped by company_id) would render that history invisible
+    and unrecoverable. Such a company is created token-less and simply isn't polled
+    until its tokens are set via /addcompany (or the env vars are restored)."""
     existing = await _fetchrow("SELECT id FROM companies LIMIT 1")
     if existing is not None:
         return
-    if not (config.GOMOTIVE_TOKEN and config.GREENLIGHT_TOKEN):
-        return  # nothing to seed from (fresh install with no legacy config)
+
+    has_legacy_tokens = bool(config.GOMOTIVE_TOKEN and config.GREENLIGHT_TOKEN)
+    orphan = await _fetchrow("SELECT id FROM events WHERE company_id IS NULL LIMIT 1")
+    has_orphan_events = orphan is not None
+    if not has_legacy_tokens and not has_orphan_events:
+        return  # fresh install, nothing to adopt
 
     company = await add_company(
         name="default",
-        gomotive_token=config.GOMOTIVE_TOKEN,
-        greenlight_token=config.GREENLIGHT_TOKEN,
+        gomotive_token=config.GOMOTIVE_TOKEN or None,
+        greenlight_token=config.GREENLIGHT_TOKEN or None,
         greenlight_base_url=config.GREENLIGHT_BASE_URL,
     )
     if config.ALERT_CHAT_ID:
@@ -261,6 +274,13 @@ async def _seed_default_company() -> None:
     await _execute(
         "UPDATE events SET company_id = $1 WHERE company_id IS NULL", company.id
     )
+    if not has_legacy_tokens:
+        logger.warning(
+            "Adopted pre-existing event history into a token-less 'default' "
+            "company (legacy GOMOTIVE_TOKEN/GREENLIGHT_TOKEN are not set). Its "
+            "history is preserved but it won't be polled until you set its tokens "
+            "via /addcompany or restore the seed env vars."
+        )
 
 
 async def close() -> None:
