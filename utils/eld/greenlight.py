@@ -110,7 +110,8 @@ async def fetch_vehicle(
     }
     async with session.get(url, headers=headers) as resp:
         if resp.status != 200:
-            body = await resp.text()
+            # Truncate the body — upstream 5xx pages are full HTML and flood logs.
+            body = " ".join((await resp.text()).split())[:160]
             raise RuntimeError(f"GreenLight /vehicles/{key} HTTP {resp.status}: {body}")
         data = await resp.json()
 
@@ -129,17 +130,43 @@ async def fetch_vehicles(
     unit_numbers: List[str], token: str, base_url: str, concurrency: int = 10
 ) -> Dict[str, Optional[GreenLightVehicle]]:
     """Look up many vehicles concurrently. Returns {original_unit_number: vehicle
-    or None}, keyed by the GoMotive unit number that was passed in."""
+    or None}, keyed by the GoMotive unit number that was passed in.
+
+    A per-unit failure (e.g. a transient GreenLight ``502``/timeout on one
+    vehicle) is swallowed and that unit is recorded as ``None`` for this cycle,
+    so a single bad response can't abort the whole company's poll/track pass.
+    ``None`` is the safe default everywhere: the poller treats it as "not in
+    GreenLight" (skipped, no false anomaly) and the tracker leaves the unit
+    flagged (no false resolve). If *every* unit fails it's logged at error level,
+    since that points at a token/endpoint problem rather than a blip."""
     results: Dict[str, Optional[GreenLightVehicle]] = {}
+    failures: Dict[str, Exception] = {}
     sem = asyncio.Semaphore(concurrency)
     timeout = aiohttp.ClientTimeout(total=30)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async def one(unit: str) -> None:
             async with sem:
-                results[unit] = await fetch_vehicle(session, unit, token, base_url)
+                try:
+                    results[unit] = await fetch_vehicle(session, unit, token, base_url)
+                except Exception as err:  # noqa: BLE001 — isolate one unit's failure
+                    results[unit] = None
+                    failures[unit] = err
 
         await asyncio.gather(*(one(u) for u in unit_numbers))
+
+    if failures:
+        sample = "; ".join(f"{u} ({failures[u]})" for u in list(failures)[:3])
+        if len(failures) == len(unit_numbers):
+            logger.error(
+                "GreenLight lookup failed for ALL %d unit(s) this cycle — likely a "
+                "token or endpoint problem. Sample: %s", len(failures), sample,
+            )
+        else:
+            logger.warning(
+                "GreenLight lookup failed for %d/%d unit(s) this cycle (treated as "
+                "not-found): %s", len(failures), len(unit_numbers), sample,
+            )
 
     return results
 
