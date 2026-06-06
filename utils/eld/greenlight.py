@@ -22,8 +22,6 @@ from urllib.parse import quote
 
 import aiohttp
 
-from data import config
-
 logger = logging.getLogger(__name__)
 
 
@@ -99,16 +97,16 @@ def _parse_vehicle(content: dict) -> Optional[GreenLightVehicle]:
 
 
 async def fetch_vehicle(
-    session: aiohttp.ClientSession, unit_number: str
+    session: aiohttp.ClientSession, unit_number: str, token: str, base_url: str
 ) -> Optional[GreenLightVehicle]:
     """Look up one vehicle by unit number. Returns None if GreenLight has no
     record for it (HTTP 200 with content=null). Raises on auth/HTTP errors so a
     token problem surfaces instead of silently yielding zero anomalies."""
     key = greenlight_key(unit_number)
-    url = f"{config.GREENLIGHT_BASE_URL.rstrip('/')}/vehicles/{quote(key)}"
+    url = f"{base_url.rstrip('/')}/vehicles/{quote(key)}"
     headers = {
         "accept": "*/*",
-        "Authorization": f"Bearer {config.GREENLIGHT_TOKEN}",
+        "Authorization": f"Bearer {token}",
     }
     async with session.get(url, headers=headers) as resp:
         if resp.status != 200:
@@ -128,7 +126,7 @@ async def fetch_vehicle(
 
 
 async def fetch_vehicles(
-    unit_numbers: List[str], concurrency: int = 10
+    unit_numbers: List[str], token: str, base_url: str, concurrency: int = 10
 ) -> Dict[str, Optional[GreenLightVehicle]]:
     """Look up many vehicles concurrently. Returns {original_unit_number: vehicle
     or None}, keyed by the GoMotive unit number that was passed in."""
@@ -139,7 +137,7 @@ async def fetch_vehicles(
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async def one(unit: str) -> None:
             async with sem:
-                results[unit] = await fetch_vehicle(session, unit)
+                results[unit] = await fetch_vehicle(session, unit, token, base_url)
 
         await asyncio.gather(*(one(u) for u in unit_numbers))
 

@@ -51,10 +51,47 @@ Disconnected on GreenLight ELD but still moving on GoMotive.
 
 | Command   | Description                                  |
 |-----------|----------------------------------------------|
-| `/status` | List vehicles currently flagged as anomalous |
+| `/status` | List vehicles currently flagged as anomalous (for this chat's company) |
 | `/history`| Recent disconnection events (last 20)        |
 | `/start`  | Start the bot                                |
 | `/help`   | Help                                         |
+
+> Regular users can only use the bot **inside a company's group chat**. A direct
+> message from a non-admin is turned away — private chats are reserved for admins
+> (so the admin commands below work in DM).
+
+**Admin-only** (restricted to `ADMINS`):
+
+| Command        | Description                                                    |
+|----------------|----------------------------------------------------------------|
+| `/addcompany`  | Step-by-step wizard to create a company; token messages are auto-deleted |
+| `/bindhere`    | Link the current chat as a company's alert group: `/bindhere <name>` |
+| `/companies`   | List all companies (tokens masked)                             |
+| `/activate`    | Re-activate a company: `/activate <name or id>`               |
+| `/deactivate`  | Stop polling a company (history kept): `/deactivate <name or id>` |
+| `/cancel`      | Abort the `/addcompany` wizard                                 |
+
+## Multi-company
+
+The bot serves **multiple trucking companies** at once. Each company has its own
+GoMotive token, GreenLight token, and Telegram alert group, and is stored in a
+`companies` table; every event is scoped by `company_id`, so two companies can
+share a unit number without colliding. Each poll/track tick iterates the active
+companies (those that are active **and** bound to an alert chat).
+
+**Adding a company** (all in Telegram, as an admin):
+
+1. DM the bot `/addcompany` and follow the prompts (name → GoMotive token →
+   GreenLight token → optional base URL). The bot deletes the messages
+   containing tokens.
+2. Add the bot to that company's Telegram alert group and send
+   `/bindhere <name>` there. It starts being polled on the next cycle.
+
+**Migration is automatic:** on first start against a database that has no
+companies, the bot seeds a single `default` company from the legacy
+`GOMOTIVE_TOKEN` / `GREENLIGHT_TOKEN` / `ALERT_CHAT_ID` env vars and backfills
+`company_id` onto existing events — so an existing single-company deployment
+keeps working untouched. After that, those env vars are seed-only.
 
 ## Quick start
 
@@ -92,10 +129,10 @@ All settings live in `.env` (gitignored, never committed):
 | `BOT_TOKEN`              | —                                                | Telegram bot token from [@BotFather](https://t.me/BotFather) |
 | `ADMINS`                 | —                                                | Comma-separated Telegram admin user IDs |
 | `GREENLIGHT_BASE_URL`    | `https://api.greenlighteld.com/logger/external`  | GreenLight API base URL |
-| `GREENLIGHT_TOKEN`       | —                                                | Carrier-issued GreenLight token (Bearer) |
-| `GOMOTIVE_BASE_URL`      | `https://api.gomotive.com`                       | GoMotive API base URL |
-| `GOMOTIVE_TOKEN`         | —                                                | Motive API key (sent as `X-Api-Key`) |
-| `ALERT_CHAT_ID`          | first admin                                      | Chat/channel ID that receives alerts (e.g. `-1001234567890`) |
+| `GREENLIGHT_TOKEN`       | —                                                | **Seed-only:** GreenLight token for the auto-seeded `default` company (see [Multi-company](#multi-company)) |
+| `GOMOTIVE_BASE_URL`      | `https://api.gomotive.com`                       | GoMotive API base URL (constant for all companies) |
+| `GOMOTIVE_TOKEN`         | —                                                | **Seed-only:** Motive API key for the `default` company |
+| `ALERT_CHAT_ID`          | first admin                                      | **Seed-only:** alert chat for the `default` company. New companies are bound with `/bindhere`. |
 | `POLL_INTERVAL`          | `300`                                            | Seconds between poll cycles |
 | `ELD_STALE_THRESHOLD`    | `600`                                            | Seconds before a GreenLight report counts as disconnected |
 | `MOVING_SPEED_THRESHOLD` | `0`                                              | mph above which a vehicle is "moving" |
@@ -112,14 +149,18 @@ Deploying to Railway? See **[SETUP.md → Deploy to Railway](SETUP.md#deploy-to-
 ├── loader.py                  # Bot & Dispatcher
 ├── data/config.py             # Reads settings from .env
 ├── handlers/users/
-│   ├── status.py              # /status
-│   └── history.py             # /history
+│   ├── status.py              # /status (scoped to the chat's company)
+│   ├── history.py             # /history
+│   └── company_admin.py       # admin: /addcompany wizard, /bindhere, /companies, …
+├── filters/is_admin.py        # IsAdmin filter (gates admin commands by ADMINS)
+├── states/company.py          # FSM states for the /addcompany wizard
 ├── utils/eld/
 │   ├── gomotive.py            # Motive client (v1+v3, pagination, kph→mph)
 │   ├── greenlight.py          # GreenLight per-vehicle lookups
 │   ├── detector.py            # Anomaly cross-reference
-│   ├── store.py               # SQLite events (dedup + auto-resolve)
-│   ├── poller.py              # 5-min loop
+│   ├── store.py               # companies + events; per-company scoping, seed/backfill
+│   ├── poller.py              # 5-min loop, per company
+│   ├── tracker.py             # 2-min loop: resolve / stopped / reminders, per company
 │   └── formatting.py          # Alert / status / history rendering
 └── scripts/
     ├── greenlight_probe.py    # One-shot GreenLight API check

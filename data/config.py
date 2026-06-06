@@ -11,18 +11,28 @@ IP = env.str("ip", "")  # Hosting IP address (unused; long-polling bot)
 
 # --- ELD anomaly detection ---------------------------------------------------
 
+# LEGACY / SEED-ONLY: GREENLIGHT_TOKEN, GOMOTIVE_TOKEN and ALERT_CHAT_ID are no
+# longer read by the live poll/track loops — those run per-company from the
+# `companies` DB table (see utils/eld/store.py, managed via the in-bot admin
+# commands /addcompany, /bindhere, etc.). On first start against a DB with no
+# companies, init_db() seeds a single "default" company from these values so the
+# original single-company production setup keeps working untouched. New companies
+# are added with the admin commands instead. The two *_BASE_URL constants are
+# still used as the GoMotive base URL (constant for all companies) and the
+# fallback GreenLight base URL.
+
 # GreenLight ELD (GL ELD) vehicle-location API
 GREENLIGHT_BASE_URL = env.str(
     "GREENLIGHT_BASE_URL", "https://api.greenlighteld.com/logger/external"
 )
-GREENLIGHT_TOKEN = env.str("GREENLIGHT_TOKEN", "")
+GREENLIGHT_TOKEN = env.str("GREENLIGHT_TOKEN", "")  # seed-only (see note above)
 
 # GoMotive (Motive) fleet API — ground-truth movement / speed
 GOMOTIVE_BASE_URL = env.str("GOMOTIVE_BASE_URL", "https://api.gomotive.com")
-GOMOTIVE_TOKEN = env.str("GOMOTIVE_TOKEN", "")
+GOMOTIVE_TOKEN = env.str("GOMOTIVE_TOKEN", "")  # seed-only (see note above)
 
 # Chat/channel that receives the anomaly alerts (e.g. -1001234567890).
-# Falls back to the first admin if not set.
+# Falls back to the first admin if not set. Seed-only (see note above).
 ALERT_CHAT_ID = env.str("ALERT_CHAT_ID", ADMINS[0] if ADMINS else "")
 
 # How often to poll both APIs, in seconds (default 5 minutes).
