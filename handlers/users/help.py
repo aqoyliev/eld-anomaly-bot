@@ -1,7 +1,7 @@
 from aiogram import types
 from aiogram.dispatcher.filters.builtin import CommandHelp
 
-from filters.is_admin import is_admin_user
+from filters.is_admin import is_admin_user, is_viewer_user
 from loader import dp
 
 USER_HELP = (
@@ -40,7 +40,22 @@ ADMIN_HELP = (
 )
 
 
+VIEWER_HELP = (
+    "<b>ELD Disconnection Bot — viewer</b>\n"
+    "You have read-only access. DM me to check status across all companies.\n\n"
+    "<b>Commands</b>\n"
+    "/status — vehicles currently flagged (all companies)\n"
+    "/history — recent disconnection events (last 20, all companies)\n"
+    "/help — show this help"
+)
+
+
 @dp.message_handler(CommandHelp())
 async def bot_help(message: types.Message):
-    text = ADMIN_HELP if is_admin_user(message.from_user) else USER_HELP
+    if is_admin_user(message.from_user):
+        text = ADMIN_HELP
+    elif is_viewer_user(message.from_user):
+        text = VIEWER_HELP
+    else:
+        text = USER_HELP
     await message.answer(text)

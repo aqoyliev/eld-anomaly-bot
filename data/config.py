@@ -6,7 +6,10 @@ env.read_env()
 
 # Read the following from the .env file
 BOT_TOKEN = env.str("BOT_TOKEN")  # Bot token
-ADMINS = env.list("ADMINS")  # List of admins
+ADMINS = env.list("ADMINS")  # List of admins (full access)
+# Read-only viewers: may DM the bot for /status and /history only (no admin
+# commands). Telegram numeric user ids, same format as ADMINS. Optional.
+VIEWERS = env.list("VIEWERS", [])
 IP = env.str("ip", "")  # Hosting IP address (unused; long-polling bot)
 
 # --- ELD anomaly detection ---------------------------------------------------

@@ -1,7 +1,7 @@
 from aiogram import types
 from aiogram.dispatcher.filters import Command
 
-from filters.is_admin import is_admin_user
+from filters.is_admin import is_admin_or_viewer
 from loader import dp
 from utils.eld import store
 from utils.eld.formatting import format_history_line
@@ -23,8 +23,8 @@ async def show_history(message: types.Message):
         await message.answer("\n".join(lines))
         return
 
-    if is_admin_user(message.from_user):
-        # Unbound chat (e.g. an admin DM): aggregate across all active companies.
+    if is_admin_or_viewer(message.from_user):
+        # Unbound chat (e.g. an admin/viewer DM): aggregate across all companies.
         blocks = []
         for c in await store.active_companies():
             events = await store.get_recent_events(c.id, limit=HISTORY_LIMIT)
