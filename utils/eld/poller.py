@@ -75,33 +75,40 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
         # GoMotive's current coordinates = where the truck actually is right now.
         location = gm.coordinates_label
         existing = await store.get_active_event(company.id, anomaly.unit_number)
-        if existing:
-            # Ongoing event — update readings, do NOT re-alert (de-dup).
+        if existing and existing.stopped_at is None:
+            # Ongoing moving event — update readings, do NOT re-alert (de-dup).
             await store.touch_event(existing.id, speed=gm.speed, location=location,
                                     lat=gm.latitude, lon=gm.longitude)
-        else:
-            disconnect_time = (
-                gl.last_report_time.isoformat() if gl.last_report_time else None
-            )
-            event = await store.open_event(
-                company_id=company.id,
-                unit_number=anomaly.unit_number,
-                vin=gl.vin,
-                driver=gl.driver,
-                eld_disconnect_time=disconnect_time,
-                speed=gm.speed,
-                location=location,
-                motive_vehicle_id=str(gm.vehicle_id) if gm.vehicle_id is not None else None,
-                lat=gm.latitude,
-                lon=gm.longitude,
-            )
-            await _send_alert(bot, company, event)
+            continue
+        if existing:
+            # The unit had stopped (anomaly paused) but is moving again: close
+            # that span at the stop time and open a fresh anomaly below — a new
+            # moving span is a new anomaly.
+            await store.resolve_event(existing.id, at=existing.stopped_at)
+            logger.info("Poll[%s]: %s rolling again — closed paused span, new anomaly.",
+                        company.name, anomaly.unit_number)
+        disconnect_time = (
+            gl.last_report_time.isoformat() if gl.last_report_time else None
+        )
+        event = await store.open_event(
+            company_id=company.id,
+            unit_number=anomaly.unit_number,
+            vin=gl.vin,
+            driver=gl.driver,
+            eld_disconnect_time=disconnect_time,
+            speed=gm.speed,
+            location=location,
+            motive_vehicle_id=str(gm.vehicle_id) if gm.vehicle_id is not None else None,
+            lat=gm.latitude,
+            lon=gm.longitude,
+        )
+        await _send_alert(bot, company, event)
 
-    # NOTE: resolution is intentionally NOT done here. The 2-min tracker owns it
-    # and closes an event on reconnect OR when the truck stops (a stop ends the
-    # moving anomaly). This loop only OPENS events, so a unit that stopped — its
-    # event already closed — and then rolls again while still disconnected is
-    # opened here as a fresh anomaly: a new moving span = a new anomaly.
+    # NOTE: the reconnect all-clear is NOT done here — the 2-min tracker owns it
+    # (and pauses an event when the truck stops). This loop opens events: a brand
+    # new anomaly, or a fresh one when a previously-stopped (paused) unit rolls
+    # again — it closes the paused span at its stop time, then opens the new one.
+    # A new moving span = a new anomaly.
 
 
 # Re-log a still-failing identical error only once every N cycles, so a

@@ -6,15 +6,15 @@ counts only moving-while-disconnected time, so for each active anomaly it:
      so the anomaly is resolved (all-clear);
   2. re-queries GoMotive by vehicle id (cheap, just the flagged units) and, by
      comparing the position to the previous check, decides whether the truck has
-     stopped/pulled over — if so it announces the stop once and CLOSES the event,
-     because a stop ends the moving anomaly. A truck that later rolls again while
-     still disconnected is re-detected by the poller as a brand-new anomaly;
+     stopped/pulled over — if so it announces the stop once and PAUSES the event
+     (marks ``stopped_at``), because a stop ends the moving anomaly. The event is
+     left open, not resolved, so a reconnect-while-parked still raises the
+     all-clear; the poller reopens a fresh anomaly if the unit rolls again;
   3. while STILL MOVING and disconnected, re-notifies the group every
      REMINDER_INTERVAL with an "Ignore" button that mutes further reminders.
 
-Resolution lives here (not in the 5-min poller) so a disconnected truck that
-merely stops isn't left open forever; the poller owns (re-)detection of moving
-disconnected units.
+The reconnect all-clear lives here (not in the 5-min poller). A paused (stopped)
+unit is otherwise idle here — only its reconnect is watched.
 """
 
 import asyncio
@@ -97,12 +97,19 @@ async def track_once(bot: Bot, company: store.Company) -> None:
                         company.name, e.unit_number)
             continue
 
+        # A paused (stopped) unit's anomaly is over for now: no stop re-detection,
+        # no readings, no reminders. It stays open only so the reconnect check
+        # above still raises the all-clear; the poller reopens a fresh anomaly if
+        # it rolls again while still disconnected.
+        if e.stopped_at:
+            continue
+
         gm = gm_map.get(e.motive_vehicle_id) if e.motive_vehicle_id else None
 
         # 2) Stopped? An anomaly counts moving-while-disconnected time only, so a
-        #    stop ENDS it: announce the stop once and CLOSE the event (at the stop
-        #    time). If the truck later rolls again while still disconnected, the
-        #    5-min poller re-detects it and opens a fresh anomaly.
+        #    stop ENDS it: announce the stop once and PAUSE the event (freeze its
+        #    duration at the stop). It is NOT resolved — that keeps the reconnect
+        #    all-clear alive — and the poller reopens a fresh anomaly on re-roll.
         if (
             gm is not None
             and gm.latitude is not None
@@ -124,8 +131,8 @@ async def track_once(bot: Bot, company: store.Company) -> None:
                     bot, company,
                     format_stopped(e, gm.coordinates_label, company_name=company.name),
                 )
-                await store.resolve_event(e.id)
-                logger.info("Tracker[%s]: %s STOPPED — anomaly closed (moved %.3f mi).",
+                await store.mark_stopped(e.id)
+                logger.info("Tracker[%s]: %s STOPPED — anomaly paused (moved %.3f mi).",
                             company.name, e.unit_number, moved_mi)
                 continue
 

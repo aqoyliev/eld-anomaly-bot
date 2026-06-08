@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS events (
     last_alert_at       TEXT,
     stop_notified       INTEGER          NOT NULL DEFAULT 0,
     reminders_muted     INTEGER          NOT NULL DEFAULT 0,
-    company_id          INTEGER
+    company_id          INTEGER,
+    stopped_at          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
@@ -91,7 +92,8 @@ CREATE TABLE IF NOT EXISTS events (
     last_alert_at       TEXT,
     stop_notified       INTEGER NOT NULL DEFAULT 0,
     reminders_muted     INTEGER NOT NULL DEFAULT 0,
-    company_id          INTEGER
+    company_id          INTEGER,
+    stopped_at          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
@@ -123,6 +125,7 @@ _MIGRATIONS = [
     ("stop_notified", "INTEGER NOT NULL DEFAULT 0"),
     ("reminders_muted", "INTEGER NOT NULL DEFAULT 0"),
     ("company_id", "INTEGER"),
+    ("stopped_at", "TEXT"),
 ]
 
 
@@ -158,6 +161,9 @@ class AnomalyEvent:
     stop_notified: int = 0
     reminders_muted: int = 0
     company_id: Optional[int] = None
+    # Set when a moving anomaly's unit stops: the span is paused (not resolved),
+    # so a later reconnect still raises the all-clear and duration freezes here.
+    stopped_at: Optional[str] = None
 
     @property
     def disconnect_dt(self) -> Optional[datetime]:
@@ -169,14 +175,25 @@ class AnomalyEvent:
         or to resolution if resolved.
 
         An anomaly counts moving-disconnected time ONLY: the event is opened when
-        the unit is seen moving and closed when it stops, so its lifetime is the
+        the unit is seen moving and frozen when it stops, so its lifetime is the
         moving span. This is deliberately NOT measured from ``eld_disconnect_time``
         (the ELD's last report) — that can predate the movement, e.g. a unit that
-        sat parked-and-disconnected for hours before it ever started rolling."""
+        sat parked-and-disconnected for hours before it ever started rolling.
+
+        The end is the stop time (if the unit has stopped — the span is over even
+        while we keep the event open to watch for a reconnect), else the resolved
+        time, else now."""
         start = _parse(self.first_detected) or self.disconnect_dt
         if start is None:
             return 0
-        end = _parse(self.resolved_at) if self.resolved else (now or datetime.utcnow())
+        if self.stopped_at:
+            end = _parse(self.stopped_at)
+        elif self.resolved:
+            end = _parse(self.resolved_at)
+        else:
+            end = None
+        if end is None:
+            end = now or datetime.utcnow()
         return max(0, int((end - start).total_seconds()))
 
 
@@ -518,9 +535,13 @@ async def mark_alerted(event_id: int) -> None:
     await _execute("UPDATE events SET last_alert_at = $1 WHERE id = $2", now, event_id)
 
 
-async def set_stop_notified(event_id: int, value: int) -> None:
+async def mark_stopped(event_id: int) -> None:
+    """Pause a moving anomaly because its unit stopped. The event stays active
+    (unresolved) so a later reconnect still raises the all-clear; ``stopped_at``
+    freezes the anomaly's duration at the stop and silences reminders."""
+    now = datetime.utcnow().isoformat(timespec="seconds")
     await _execute(
-        "UPDATE events SET stop_notified = $1 WHERE id = $2", value, event_id
+        "UPDATE events SET stopped_at = $1 WHERE id = $2", now, event_id
     )
 
 
@@ -530,11 +551,13 @@ async def mute_reminders(event_id: int) -> None:
     )
 
 
-async def resolve_event(event_id: int) -> None:
-    now = datetime.utcnow().isoformat(timespec="seconds")
+async def resolve_event(event_id: int, at: Optional[str] = None) -> None:
+    """Close an event. ``at`` overrides the resolution timestamp (e.g. close a
+    paused span at its stop time rather than now); defaults to now."""
+    resolved_at = at or datetime.utcnow().isoformat(timespec="seconds")
     await _execute(
         "UPDATE events SET resolved = 1, resolved_at = $1 WHERE id = $2",
-        now, event_id,
+        resolved_at, event_id,
     )
 
 
