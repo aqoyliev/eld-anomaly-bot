@@ -97,9 +97,11 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             )
             await _send_alert(bot, company, event)
 
-    # NOTE: resolution is intentionally NOT done here. A disconnected truck that
-    # simply stops would drop out of the moving set and be wrongly resolved. The
-    # 2-min tracker owns resolution — it resolves only when the ELD reconnects.
+    # NOTE: resolution is intentionally NOT done here. The 2-min tracker owns it
+    # and closes an event on reconnect OR when the truck stops (a stop ends the
+    # moving anomaly). This loop only OPENS events, so a unit that stopped — its
+    # event already closed — and then rolls again while still disconnected is
+    # opened here as a fresh anomaly: a new moving span = a new anomaly.
 
 
 # Re-log a still-failing identical error only once every N cycles, so a

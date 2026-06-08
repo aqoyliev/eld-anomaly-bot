@@ -1,17 +1,20 @@
 """Fine-grained tracker for already-flagged (disconnected) units.
 
-Runs on a faster cadence than the 5-min sweep (default every 2 min). For each
-active anomaly it:
+Runs on a faster cadence than the 5-min sweep (default every 2 min). An anomaly
+counts only moving-while-disconnected time, so for each active anomaly it:
   1. checks GreenLight — if the ELD reports fresh again, the device reconnected,
-     so the anomaly is resolved;
+     so the anomaly is resolved (all-clear);
   2. re-queries GoMotive by vehicle id (cheap, just the flagged units) and, by
      comparing the position to the previous check, decides whether the truck has
-     stopped/pulled over — notifying the group once per stop;
-  3. re-notifies the group every REMINDER_INTERVAL while still disconnected,
-     attaching an "Ignore" button that mutes further reminders for that unit.
+     stopped/pulled over — if so it announces the stop once and CLOSES the event,
+     because a stop ends the moving anomaly. A truck that later rolls again while
+     still disconnected is re-detected by the poller as a brand-new anomaly;
+  3. while STILL MOVING and disconnected, re-notifies the group every
+     REMINDER_INTERVAL with an "Ignore" button that mutes further reminders.
 
 Resolution lives here (not in the 5-min poller) so a disconnected truck that
-merely stops isn't wrongly resolved.
+merely stops isn't left open forever; the poller owns (re-)detection of moving
+disconnected units.
 """
 
 import asyncio
@@ -88,7 +91,7 @@ async def track_once(bot: Bot, company: store.Company) -> None:
             gl, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
         ):
             await store.resolve_event(e.id)
-            # All-clear goes out even if reminders were muted / the unit stopped.
+            # All-clear goes out even if reminders were muted.
             await _notify(bot, company, format_reconnected(e, company_name=company.name))
             logger.info("Tracker[%s]: %s ELD reconnected — resolved.",
                         company.name, e.unit_number)
@@ -96,7 +99,10 @@ async def track_once(bot: Bot, company: store.Company) -> None:
 
         gm = gm_map.get(e.motive_vehicle_id) if e.motive_vehicle_id else None
 
-        # 2) Stop detection: compare this position to the previous check's.
+        # 2) Stopped? An anomaly counts moving-while-disconnected time only, so a
+        #    stop ENDS it: announce the stop once and CLOSE the event (at the stop
+        #    time). If the truck later rolls again while still disconnected, the
+        #    5-min poller re-detects it and opens a fresh anomaly.
         if (
             gm is not None
             and gm.latitude is not None
@@ -108,33 +114,31 @@ async def track_once(bot: Bot, company: store.Company) -> None:
             # Motive reports speed: null for a parked vehicle, so null counts as
             # stopped (the displacement check guards against a null-but-moving read).
             slow = gm.speed is None or gm.speed <= config.STOP_SPEED_MPH
-            stopped = moved_mi < config.STOP_DISPLACEMENT_MI and slow
-            if stopped and not e.stop_notified:
+            if moved_mi < config.STOP_DISPLACEMENT_MI and slow:
+                # Record the final reading so the STOPPED coords/speed are current.
+                await store.touch_event(
+                    e.id, speed=gm.speed, location=gm.coordinates_label,
+                    lat=gm.latitude, lon=gm.longitude,
+                )
                 await _notify(
                     bot, company,
                     format_stopped(e, gm.coordinates_label, company_name=company.name),
                 )
-                await store.set_stop_notified(e.id, 1)
-                logger.info("Tracker[%s]: %s STOPPED (moved %.3f mi).",
+                await store.resolve_event(e.id)
+                logger.info("Tracker[%s]: %s STOPPED — anomaly closed (moved %.3f mi).",
                             company.name, e.unit_number, moved_mi)
-            elif (
-                e.stop_notified
-                and moved_mi >= config.STOP_DISPLACEMENT_MI
-                and not slow
-            ):
-                # Only un-latch on genuine movement (real displacement AND
-                # speed), so a single noisy speed/GPS reading on a parked truck
-                # can't reset the latch and re-fire a duplicate STOPPED alert.
-                await store.set_stop_notified(e.id, 0)  # moving again
+                continue
 
-        # 3) Record the latest reading for next cycle's comparison.
+        # 3) Still moving + disconnected: record the latest reading for next
+        #    cycle's stop comparison.
         if gm is not None:
             await store.touch_event(
                 e.id, speed=gm.speed, location=gm.coordinates_label,
                 lat=gm.latitude, lon=gm.longitude,
             )
 
-        # 4) Periodic "still disconnected" reminder, unless muted via Ignore.
+        # 4) Periodic reminder while STILL MOVING and disconnected (a stopped unit
+        #    has already been closed above), unless muted via the Ignore button.
         if not e.reminders_muted and e.last_alert_at:
             since = (now - datetime.fromisoformat(e.last_alert_at)).total_seconds()
             if since >= config.REMINDER_INTERVAL:

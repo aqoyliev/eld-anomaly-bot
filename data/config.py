@@ -49,8 +49,9 @@ MOVING_SPEED_THRESHOLD = env.float("MOVING_SPEED_THRESHOLD", 0.0)
 # How often the tracker re-checks disconnected units, in seconds (default 2 min).
 # It re-queries GoMotive by vehicle id (cheap) plus GreenLight for reconnection.
 TRACK_INTERVAL = env.int("TRACK_INTERVAL", 120)
-# Re-notify the group about a still-disconnected unit this often (default 30 min).
-REMINDER_INTERVAL = env.int("REMINDER_INTERVAL", 1800)
+# Re-notify the group about a still-MOVING disconnected unit this often (default
+# 10 min). Stopped units get no reminder — their anomaly is closed on stop.
+REMINDER_INTERVAL = env.int("REMINDER_INTERVAL", 600)
 # A flagged unit is treated as stopped/pulled over when BOTH hold between two
 # tracker checks: it moved less than STOP_DISPLACEMENT_MI miles AND its current
 # speed is at/below STOP_SPEED_MPH. The 2-min gap filters out red lights.

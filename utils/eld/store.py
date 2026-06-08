@@ -164,16 +164,16 @@ class AnomalyEvent:
         return _parse(self.eld_disconnect_time)
 
     def duration_seconds(self, now: Optional[datetime] = None) -> int:
-        """How long the ELD has been disconnected, measured from its last
-        GreenLight report (``eld_disconnect_time`` — the "ELD disconnected at"
-        time) to now, or to resolution if resolved. Falls back to
-        ``first_detected`` only if the disconnect time is missing.
+        """How long this anomaly has run, measured from ``first_detected`` (when
+        the unit was first seen moving-while-disconnected for this span) to now,
+        or to resolution if resolved.
 
-        Counted from the disconnect time on purpose, so this agrees with the
-        "ELD disconnected at" line shown alongside it. Consequence: a brand-new
-        alert is always >= ELD_STALE_THRESHOLD (~10 min), since a unit isn't
-        flagged until its report is already that stale."""
-        start = self.disconnect_dt or _parse(self.first_detected)
+        An anomaly counts moving-disconnected time ONLY: the event is opened when
+        the unit is seen moving and closed when it stops, so its lifetime is the
+        moving span. This is deliberately NOT measured from ``eld_disconnect_time``
+        (the ELD's last report) — that can predate the movement, e.g. a unit that
+        sat parked-and-disconnected for hours before it ever started rolling."""
+        start = _parse(self.first_detected) or self.disconnect_dt
         if start is None:
             return 0
         end = _parse(self.resolved_at) if self.resolved else (now or datetime.utcnow())
