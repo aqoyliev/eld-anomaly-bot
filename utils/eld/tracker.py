@@ -117,7 +117,14 @@ async def track_once(bot: Bot, company: store.Company) -> None:
                 await store.set_stop_notified(e.id, 1)
                 logger.info("Tracker[%s]: %s STOPPED (moved %.3f mi).",
                             company.name, e.unit_number, moved_mi)
-            elif not stopped and e.stop_notified:
+            elif (
+                e.stop_notified
+                and moved_mi >= config.STOP_DISPLACEMENT_MI
+                and not slow
+            ):
+                # Only un-latch on genuine movement (real displacement AND
+                # speed), so a single noisy speed/GPS reading on a parked truck
+                # can't reset the latch and re-fire a duplicate STOPPED alert.
                 await store.set_stop_notified(e.id, 0)  # moving again
 
         # 3) Record the latest reading for next cycle's comparison.
