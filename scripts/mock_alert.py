@@ -1,8 +1,8 @@
 """Send a test ELD-disconnection alert through the real pipeline.
 
-Because GreenLight isn't authorized yet, this mocks the GreenLight side only:
-it picks a vehicle that is *actually moving right now* on GoMotive (live data),
-then pretends GreenLight reports that same unit as a stale/disconnected ELD.
+This mocks the Quantum side only: it picks a vehicle that is *actually moving
+right now* on GoMotive (live data), then pretends Quantum reports that same unit
+as a stale/disconnected ELD.
 The detector, store (dedup), and Telegram alert all run for real, so the 🚨
 message that lands in your alert channel is exactly what production will send.
 
@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aiogram import Bot, types  # noqa: E402
 
 from data import config  # noqa: E402
-from utils.eld import gomotive, greenlight, poller, store  # noqa: E402
-from utils.eld.greenlight import GreenLightVehicle  # noqa: E402
+from utils.eld import gomotive, poller, quantumeld, store  # noqa: E402
+from utils.eld.quantumeld import QuantumVehicle  # noqa: E402
 
 
 async def run(unit: str | None, stale_min: int, twice: bool) -> int:
@@ -33,7 +33,7 @@ async def run(unit: str | None, stale_min: int, twice: bool) -> int:
 
     company = await store.get_company_by_name("default")
     if company is None:
-        print("No 'default' company found. Set the legacy GOMOTIVE/GREENLIGHT env "
+        print("No 'default' company found. Set the legacy GOMOTIVE/QUANTUM env "
               "vars (so init_db seeds it) or add one with the /addcompany bot command.")
         return 1
 
@@ -56,23 +56,23 @@ async def run(unit: str | None, stale_min: int, twice: bool) -> int:
     print(f"Picked moving vehicle {unit!r} (VIN {gm.vin}): "
           f"{gm.speed:.0f} mph @ {gm.location}")
 
-    # Fake GreenLight: last report `stale_min` min old (UTC, like real GL times).
+    # Fake Quantum: last report `stale_min` min old (UTC, like real Quantum times).
     stale_time = datetime.utcnow() - timedelta(minutes=stale_min)
-    mock_vehicle = GreenLightVehicle(
+    mock_vehicle = QuantumVehicle(
         unit_number=unit,
         vin=gm.vin,
         driver="TEST DRIVER",
         state=None,
-        location="(GreenLight last-known)",
+        location="(Quantum last-known)",
         last_report_time=stale_time,
     )
 
     async def fake_fetch(unit_numbers, token=None, base_url=None, concurrency=10):
-        # Pretend GreenLight reports the chosen unit as stale; others not found.
+        # Pretend Quantum reports the chosen unit as stale; others not found.
         return {u: (mock_vehicle if u == unit else None) for u in unit_numbers}
 
-    # Patch only the GreenLight lookup; everything else is the real pipeline.
-    greenlight.fetch_vehicles = fake_fetch
+    # Patch only the Quantum lookup; everything else is the real pipeline.
+    quantumeld.fetch_vehicles = fake_fetch
 
     bot = Bot(token=config.BOT_TOKEN, parse_mode=types.ParseMode.HTML)
     try:
@@ -106,7 +106,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Send a test ELD-disconnect alert.")
     parser.add_argument("--unit", help="specific unit number (default: first moving)")
     parser.add_argument("--stale-min", type=int, default=35,
-                        help="minutes since the mocked GreenLight report (default 35)")
+                        help="minutes since the mocked Quantum report (default 35)")
     parser.add_argument("--once", action="store_true",
                         help="run a single cycle (default runs twice to show dedup)")
     parser.add_argument("--cleanup", action="store_true",

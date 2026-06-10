@@ -62,7 +62,7 @@ def format_alert(event: AnomalyEvent, company_name: Optional[str] = None) -> str
         f"<b>Current speed:</b> {_fmt_speed(event.last_speed)}\n"
         f"<b>ELD disconnected at:</b> {_fmt_time(event.eld_disconnect_time)}\n"
         f"<b>Anomaly duration:</b> {human_duration(event.duration_seconds())}\n\n"
-        "<i>Disconnected on GreenLight ELD but still moving on GoMotive.</i>"
+        "<i>Disconnected on Quantum ELD but still moving on GoMotive.</i>"
     )
 
 

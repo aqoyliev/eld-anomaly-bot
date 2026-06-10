@@ -45,7 +45,7 @@ Then edit `.env`:
 |--------------------------|---------------|
 | `BOT_TOKEN`              | [@BotFather](https://t.me/BotFather) → `/newbot` (or `/token`) |
 | `ADMINS`                 | Your numeric Telegram user ID ([@userinfobot](https://t.me/userinfobot)) |
-| `GREENLIGHT_TOKEN`       | Carrier-issued GreenLight ELD external-API token |
+| `QUANTUM_TOKEN`          | Carrier-issued Quantum ELD external-API token |
 | `GOMOTIVE_TOKEN`         | Motive API key (Motive app → Developers → API keys) |
 | `ALERT_CHAT_ID`          | The channel/group ID that receives alerts (e.g. `-1001234567890`) |
 
@@ -78,7 +78,7 @@ Steps:
 2. Add the **PostgreSQL** plugin. Railway injects `DATABASE_URL`, and the bot
    uses Postgres automatically (no `DATABASE_URL` → it falls back to SQLite).
    The schema is created/migrated on first boot.
-3. Set service **Variables**: `BOT_TOKEN`, `ADMINS`, `GREENLIGHT_TOKEN`,
+3. Set service **Variables**: `BOT_TOKEN`, `ADMINS`, `QUANTUM_TOKEN`,
    `GOMOTIVE_TOKEN`, `ALERT_CHAT_ID` (plus any tuning overrides from
    `.env.example`). `DATABASE_URL` comes from the Postgres plugin.
 4. Deploy — the worker runs `python app.py`.
@@ -94,6 +94,6 @@ Steps:
   or use a separate test bot token.
 - **`db.sqlite3`** (event history) is gitignored and machine-local, so
   `/history` starts empty on a fresh clone.
-- **Verify GreenLight access:** `python scripts/greenlight_probe.py`.
+- **Verify Quantum access:** `python scripts/quantum_probe.py`.
 - **Send a test alert:** `python scripts/mock_alert.py` (then
   `python scripts/mock_alert.py --cleanup`).

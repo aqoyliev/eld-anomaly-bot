@@ -6,5 +6,5 @@ class AddCompany(StatesGroup):
     that carried the secret (where Telegram allows it)."""
     name = State()
     gomotive_token = State()
-    greenlight_token = State()
-    greenlight_base_url = State()
+    quantum_token = State()
+    quantum_base_url = State()

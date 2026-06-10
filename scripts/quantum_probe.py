@@ -1,12 +1,12 @@
-"""Quick probe for the GreenLight ELD vehicle-location API.
+"""Quick probe for the Quantum ELD vehicle-location API.
 
 Calls GET /vehicles/current with the token from .env and prints the raw JSON
-response, plus a short summary. Handy for checking whether the carrier has
-authorized the token yet (it currently returns {"result":{"code":"forbidden"}}).
+response, plus a short summary. Handy for confirming the carrier-issued token
+actually authenticates against Quantum before pointing the bot at it.
 
 Run from the project root:
-    .venv/Scripts/python.exe scripts/greenlight_probe.py
-    .venv/Scripts/python.exe scripts/greenlight_probe.py --page 0 --size 10
+    .venv/Scripts/python.exe scripts/quantum_probe.py
+    .venv/Scripts/python.exe scripts/quantum_probe.py --page 0 --size 10
 """
 
 import argparse
@@ -24,14 +24,14 @@ from data import config  # noqa: E402
 
 
 async def probe(page: int, size: int) -> int:
-    if not config.GREENLIGHT_TOKEN:
-        print("GREENLIGHT_TOKEN is not set in .env")
+    if not config.QUANTUM_TOKEN:
+        print("QUANTUM_TOKEN is not set in .env")
         return 1
 
-    url = f"{config.GREENLIGHT_BASE_URL.rstrip('/')}/vehicles/current"
+    url = f"{config.QUANTUM_BASE_URL.rstrip('/')}/vehicles/current"
     headers = {
         "accept": "*/*",
-        "Authorization": f"Bearer {config.GREENLIGHT_TOKEN}",
+        "Authorization": f"Bearer {config.QUANTUM_TOKEN}",
     }
     params = {"page": page, "size": size}
 
@@ -66,14 +66,14 @@ async def probe(page: int, size: int) -> int:
         print(f"pageable.total  : {pageable.get('total')}  "
               f"(current={pageable.get('current')}, next={pageable.get('next')})")
     if code != "ok":
-        print("\nToken is not authorized yet — ask the carrier to grant this "
-              "token access to /vehicles/current.")
+        print("\nToken did not authenticate (result.code != 'ok'). Check the "
+              "QUANTUM_TOKEN value and that the carrier has granted it access.")
         return 3
     return 0
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Probe the GreenLight ELD API.")
+    parser = argparse.ArgumentParser(description="Probe the Quantum ELD API.")
     parser.add_argument("--page", type=int, default=0, help="page number (default 0)")
     parser.add_argument("--size", type=int, default=10, help="page size (default 10)")
     args = parser.parse_args()

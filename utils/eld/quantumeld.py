@@ -1,15 +1,19 @@
-"""Client for the GreenLight ELD (GL ELD) vehicle-location API.
+"""Client for the Quantum ELD vehicle-location API.
 
-The carrier's token is authorized for the *per-vehicle* endpoint
-``GET /vehicles/{unit_number}`` (the list endpoint /vehicles/current is not), so
-the bot drives detection from GoMotive: for each vehicle GoMotive reports as
-moving, we look it up here by unit number to read its last GreenLight report
-time. A report older than ``ELD_STALE_THRESHOLD`` means the ELD looks
-disconnected / offline.
+The bot drives detection from GoMotive: for each vehicle GoMotive reports as
+moving, we look it up here by unit number (``GET /vehicles/{unit_number}``) to
+read its last Quantum ELD report time. A report older than
+``ELD_STALE_THRESHOLD`` means the ELD looks disconnected / offline.
+
+Quantum also exposes a list endpoint (``GET /vehicles/current``), but the design
+stays GoMotive-first → per-unit lookups by choice: detection always needs
+GoMotive's ground-truth movement/speed to compare against ELD freshness, so we
+only look up the (few) units GoMotive reports moving rather than paging the
+whole fleet.
 
 GoMotive appends owner/tag suffixes to unit numbers (e.g. "0942  O/O") while
-GreenLight stores the bare number ("0942"), so we strip the suffix before
-looking up — see :func:`greenlight_key`.
+Quantum stores the bare number ("0942"), so we strip the suffix before looking
+up — see :func:`quantum_key`.
 """
 
 import asyncio
@@ -26,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class GreenLightVehicle:
+class QuantumVehicle:
     unit_number: str
     vin: Optional[str]
     driver: Optional[str]
@@ -43,15 +47,15 @@ class GreenLightVehicle:
 
     @property
     def coordinates_label(self) -> str:
-        """GreenLight's last-reported lat,long (the point where the ELD went
+        """Quantum's last-reported lat,long (the point where the ELD went
         dark). Falls back to the place name if coordinates are missing."""
         if self.latitude is not None and self.longitude is not None:
             return f"{self.latitude}, {self.longitude}"
         return self.location_label
 
 
-def greenlight_key(unit_number: str) -> str:
-    """Derive the bare unit number GreenLight stores from a GoMotive unit number.
+def quantum_key(unit_number: str) -> str:
+    """Derive the bare unit number Quantum stores from a GoMotive unit number.
 
     "0942  O/O" -> "0942", "2512 O/O" -> "2512", "002  ZM" -> "002",
     "1277  CROSS USA" -> "1277", "1137" -> "1137".
@@ -72,11 +76,11 @@ def _parse_time(value: Optional[str]) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(value)
     except ValueError:
-        logger.warning("GreenLight: could not parse time %r", value)
+        logger.warning("Quantum: could not parse time %r", value)
         return None
 
 
-def _parse_vehicle(content: dict) -> Optional[GreenLightVehicle]:
+def _parse_vehicle(content: dict) -> Optional[QuantumVehicle]:
     vehicle = content.get("vehicle") or {}
     unit_number = vehicle.get("unit_number")
     if not unit_number:
@@ -84,7 +88,7 @@ def _parse_vehicle(content: dict) -> Optional[GreenLightVehicle]:
     location = content.get("location") or {}
     driver = (content.get("driver") or {}).get("name")
     coords = location.get("vehicle_coordinates") or {}
-    return GreenLightVehicle(
+    return QuantumVehicle(
         unit_number=str(unit_number),
         vin=vehicle.get("vin"),
         driver=driver,
@@ -98,11 +102,11 @@ def _parse_vehicle(content: dict) -> Optional[GreenLightVehicle]:
 
 async def fetch_vehicle(
     session: aiohttp.ClientSession, unit_number: str, token: str, base_url: str
-) -> Optional[GreenLightVehicle]:
-    """Look up one vehicle by unit number. Returns None if GreenLight has no
+) -> Optional[QuantumVehicle]:
+    """Look up one vehicle by unit number. Returns None if Quantum has no
     record for it (HTTP 200 with content=null). Raises on auth/HTTP errors so a
     token problem surfaces instead of silently yielding zero anomalies."""
-    key = greenlight_key(unit_number)
+    key = quantum_key(unit_number)
     url = f"{base_url.rstrip('/')}/vehicles/{quote(key)}"
     headers = {
         "accept": "*/*",
@@ -112,34 +116,34 @@ async def fetch_vehicle(
         if resp.status != 200:
             # Truncate the body — upstream 5xx pages are full HTML and flood logs.
             body = " ".join((await resp.text()).split())[:160]
-            raise RuntimeError(f"GreenLight /vehicles/{key} HTTP {resp.status}: {body}")
+            raise RuntimeError(f"Quantum /vehicles/{key} HTTP {resp.status}: {body}")
         data = await resp.json()
 
     code = (data.get("result") or {}).get("code")
     if code != "ok":
         description = (data.get("result") or {}).get("description", code)
-        raise RuntimeError(f"GreenLight /vehicles/{key} error: {code} ({description})")
+        raise RuntimeError(f"Quantum /vehicles/{key} error: {code} ({description})")
 
     content = data.get("content")
     if not content:
-        return None  # token is fine, this unit just isn't in GreenLight
+        return None  # token is fine, this unit just isn't in Quantum
     return _parse_vehicle(content)
 
 
 async def fetch_vehicles(
     unit_numbers: List[str], token: str, base_url: str, concurrency: int = 10
-) -> Dict[str, Optional[GreenLightVehicle]]:
+) -> Dict[str, Optional[QuantumVehicle]]:
     """Look up many vehicles concurrently. Returns {original_unit_number: vehicle
     or None}, keyed by the GoMotive unit number that was passed in.
 
-    A per-unit failure (e.g. a transient GreenLight ``502``/timeout on one
+    A per-unit failure (e.g. a transient Quantum ``502``/timeout on one
     vehicle) is swallowed and that unit is recorded as ``None`` for this cycle,
     so a single bad response can't abort the whole company's poll/track pass.
     ``None`` is the safe default everywhere: the poller treats it as "not in
-    GreenLight" (skipped, no false anomaly) and the tracker leaves the unit
+    Quantum" (skipped, no false anomaly) and the tracker leaves the unit
     flagged (no false resolve). If *every* unit fails it's logged at error level,
     since that points at a token/endpoint problem rather than a blip."""
-    results: Dict[str, Optional[GreenLightVehicle]] = {}
+    results: Dict[str, Optional[QuantumVehicle]] = {}
     failures: Dict[str, Exception] = {}
     sem = asyncio.Semaphore(concurrency)
     timeout = aiohttp.ClientTimeout(total=30)
@@ -159,12 +163,12 @@ async def fetch_vehicles(
         sample = "; ".join(f"{u} ({failures[u]})" for u in list(failures)[:3])
         if len(failures) == len(unit_numbers):
             logger.error(
-                "GreenLight lookup failed for ALL %d unit(s) this cycle — likely a "
+                "Quantum lookup failed for ALL %d unit(s) this cycle — likely a "
                 "token or endpoint problem. Sample: %s", len(failures), sample,
             )
         else:
             logger.warning(
-                "GreenLight lookup failed for %d/%d unit(s) this cycle (treated as "
+                "Quantum lookup failed for %d/%d unit(s) this cycle (treated as "
                 "not-found): %s", len(failures), len(unit_numbers), sample,
             )
 
@@ -172,15 +176,15 @@ async def fetch_vehicles(
 
 
 def is_disconnected(
-    vehicle: GreenLightVehicle,
+    vehicle: QuantumVehicle,
     *,
     threshold_seconds: int,
     now: Optional[datetime] = None,
 ) -> bool:
-    """True if the vehicle's last GreenLight report is older than the threshold
+    """True if the vehicle's last Quantum report is older than the threshold
     (i.e. the ELD looks disconnected/offline).
 
-    GreenLight report times are UTC (naive), so compare against UTC now."""
+    Quantum report times are UTC (naive), so compare against UTC now."""
     if vehicle.last_report_time is None:
         return False
     now = now or datetime.utcnow()

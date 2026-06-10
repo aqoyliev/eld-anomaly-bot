@@ -14,7 +14,7 @@ IP = env.str("ip", "")  # Hosting IP address (unused; long-polling bot)
 
 # --- ELD anomaly detection ---------------------------------------------------
 
-# LEGACY / SEED-ONLY: GREENLIGHT_TOKEN, GOMOTIVE_TOKEN and ALERT_CHAT_ID are no
+# LEGACY / SEED-ONLY: QUANTUM_TOKEN, GOMOTIVE_TOKEN and ALERT_CHAT_ID are no
 # longer read by the live poll/track loops — those run per-company from the
 # `companies` DB table (see utils/eld/store.py, managed via the in-bot admin
 # commands /addcompany, /bindhere, etc.). On first start against a DB with no
@@ -22,13 +22,13 @@ IP = env.str("ip", "")  # Hosting IP address (unused; long-polling bot)
 # original single-company production setup keeps working untouched. New companies
 # are added with the admin commands instead. The two *_BASE_URL constants are
 # still used as the GoMotive base URL (constant for all companies) and the
-# fallback GreenLight base URL.
+# fallback Quantum ELD base URL.
 
-# GreenLight ELD (GL ELD) vehicle-location API
-GREENLIGHT_BASE_URL = env.str(
-    "GREENLIGHT_BASE_URL", "https://api.greenlighteld.com/logger/external"
+# Quantum ELD vehicle-location API
+QUANTUM_BASE_URL = env.str(
+    "QUANTUM_BASE_URL", "https://api.quantumeld.com/logger/external"
 )
-GREENLIGHT_TOKEN = env.str("GREENLIGHT_TOKEN", "")  # seed-only (see note above)
+QUANTUM_TOKEN = env.str("QUANTUM_TOKEN", "")  # seed-only (see note above)
 
 # GoMotive (Motive) fleet API — ground-truth movement / speed
 GOMOTIVE_BASE_URL = env.str("GOMOTIVE_BASE_URL", "https://api.gomotive.com")
@@ -41,7 +41,7 @@ ALERT_CHAT_ID = env.str("ALERT_CHAT_ID", ADMINS[0] if ADMINS else "")
 # How often to poll both APIs, in seconds (default 5 minutes).
 POLL_INTERVAL = env.int("POLL_INTERVAL", 300)
 
-# A GreenLight report older than this many seconds means the ELD is treated as
+# A Quantum report older than this many seconds means the ELD is treated as
 # disconnected / offline (default 10 minutes).
 ELD_STALE_THRESHOLD = env.int("ELD_STALE_THRESHOLD", 600)
 
@@ -50,7 +50,7 @@ MOVING_SPEED_THRESHOLD = env.float("MOVING_SPEED_THRESHOLD", 0.0)
 
 # --- Tracking of already-flagged (disconnected) units ------------------------
 # How often the tracker re-checks disconnected units, in seconds (default 2 min).
-# It re-queries GoMotive by vehicle id (cheap) plus GreenLight for reconnection.
+# It re-queries GoMotive by vehicle id (cheap) plus Quantum for reconnection.
 TRACK_INTERVAL = env.int("TRACK_INTERVAL", 120)
 # Re-notify the group about a still-MOVING disconnected unit this often (default
 # 10 min). Stopped units get no reminder — their anomaly is closed on stop.

@@ -1,12 +1,12 @@
-"""Poll the GreenLight ELD API until the token becomes authorized.
+"""Poll the Quantum ELD API until the token becomes authorized.
 
 Calls GET /vehicles/current on an interval and keeps going while the response
 is `forbidden`/`invalid_token`. Exits 0 (printing a vehicle count) the moment it
 returns `ok`, or exits 4 if it hits the max number of attempts.
 
 Run from the project root:
-    .venv/Scripts/python.exe scripts/greenlight_watch.py
-    .venv/Scripts/python.exe scripts/greenlight_watch.py --interval 180 --max-tries 240
+    .venv/Scripts/python.exe scripts/quantum_watch.py
+    .venv/Scripts/python.exe scripts/quantum_watch.py --interval 180 --max-tries 240
 """
 
 import argparse
@@ -23,10 +23,10 @@ from data import config  # noqa: E402
 
 
 async def check() -> tuple[str, object]:
-    url = f"{config.GREENLIGHT_BASE_URL.rstrip('/')}/vehicles/current"
+    url = f"{config.QUANTUM_BASE_URL.rstrip('/')}/vehicles/current"
     headers = {
         "accept": "*/*",
-        "Authorization": f"Bearer {config.GREENLIGHT_TOKEN}",
+        "Authorization": f"Bearer {config.QUANTUM_TOKEN}",
     }
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
         async with s.get(url, headers=headers, params={"page": 0, "size": 10}) as r:
@@ -62,7 +62,7 @@ async def watch(interval: int, max_tries: int) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Watch GreenLight token auth.")
+    parser = argparse.ArgumentParser(description="Watch Quantum token auth.")
     parser.add_argument("--interval", type=int, default=180,
                         help="seconds between checks (default 180)")
     parser.add_argument("--max-tries", type=int, default=240,

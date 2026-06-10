@@ -7,7 +7,7 @@ from loader import dp
 USER_HELP = (
     "<b>ELD Disconnection Bot</b>\n"
     "I watch your fleet and flag any unit that's moving on GoMotive while its "
-    "GreenLight ELD has gone silent (a likely disconnection). Alerts land in "
+    "Quantum ELD has gone silent (a likely disconnection). Alerts land in "
     "this group automatically.\n\n"
     "<b>Commands</b>\n"
     "/status — vehicles currently flagged for this group's company\n"
@@ -19,7 +19,7 @@ USER_HELP = (
 ADMIN_HELP = (
     "<b>ELD Disconnection Bot — admin help</b>\n"
     "I watch each company's fleet and flag any unit moving on GoMotive while its "
-    "GreenLight ELD has gone silent. Each company has its own tokens and alert "
+    "Quantum ELD has gone silent. Each company has its own tokens and alert "
     "group.\n\n"
     "<b>Everyone (in a company's group)</b>\n"
     "/status — vehicles currently flagged for that group's company\n"

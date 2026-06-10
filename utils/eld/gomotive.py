@@ -1,5 +1,5 @@
 """Client for the GoMotive (Motive) fleet API — the ground-truth movement
-source used to confirm a vehicle is actually moving while its GreenLight ELD
+source used to confirm a vehicle is actually moving while its Quantum ELD
 looks disconnected.
 
 Strategy: query v3 first (Motive Vehicle Gateway feed, speed in km/h), then fill
@@ -38,7 +38,7 @@ _MAX_IDS_PER_CALL = 100
 @dataclass
 class GoMotiveVehicle:
     unit_number: str
-    vin: Optional[str]               # join key against GreenLight
+    vin: Optional[str]               # join key against Quantum
     speed: Optional[float]            # mph (always normalised to mph)
     location: Optional[str]          # human-readable last known location
     time: Optional[datetime]         # timestamp of this reading

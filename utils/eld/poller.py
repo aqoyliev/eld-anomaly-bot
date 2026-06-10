@@ -6,7 +6,7 @@ import logging
 from aiogram import Bot
 
 from data import config
-from . import gomotive, greenlight, store
+from . import gomotive, quantumeld, store
 from .detector import find_anomalies
 from .formatting import format_alert
 
@@ -29,12 +29,12 @@ async def _send_alert(
 
 
 async def poll_once(bot: Bot, company: store.Company) -> None:
-    if not company.greenlight_token:
-        logger.warning("Company %s has no GreenLight token; skipping poll cycle.",
+    if not company.quantum_token:
+        logger.warning("Company %s has no Quantum token; skipping poll cycle.",
                        company.name)
         return
 
-    gl_base_url = company.greenlight_base_url or config.GREENLIGHT_BASE_URL
+    quantum_base_url = company.quantum_base_url or config.QUANTUM_BASE_URL
 
     # 1. Ask GoMotive which vehicles are moving right now. (GoMotive's base URL is
     #    a constant, so it stays in config; only the token is per-company.)
@@ -47,31 +47,31 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
         logger.info("Poll[%s]: no moving vehicles on GoMotive.", company.name)
         return
 
-    # 2. Look those vehicles up in GreenLight by unit number to read their last
+    # 2. Look those vehicles up in Quantum by unit number to read their last
     #    report time (a stale report => ELD disconnected/offline).
-    gl_lookup = await greenlight.fetch_vehicles(
-        list(moving.keys()), company.greenlight_token, gl_base_url
+    quantum_lookup = await quantumeld.fetch_vehicles(
+        list(moving.keys()), company.quantum_token, quantum_base_url
     )
 
     anomalies = find_anomalies(
-        moving, gl_lookup, threshold_seconds=config.ELD_STALE_THRESHOLD
+        moving, quantum_lookup, threshold_seconds=config.ELD_STALE_THRESHOLD
     )
-    # Units GoMotive reports moving but GreenLight has no record for (content:
-    # null). Normally these are units outside our GreenLight account and are
+    # Units GoMotive reports moving but Quantum has no record for (content:
+    # null). Normally these are units outside our Quantum account and are
     # safely ignored; log them so a real fleet vehicle that ever lands here
     # (i.e. a disconnection we'd otherwise miss) is visible.
-    not_in_gl = [u for u, v in gl_lookup.items() if v is None]
-    found_in_gl = len(moving) - len(not_in_gl)
+    not_in_quantum = [u for u, v in quantum_lookup.items() if v is None]
+    found_in_quantum = len(moving) - len(not_in_quantum)
     logger.info(
-        "Poll[%s]: %d moving, %d found in GreenLight, %d anomalies",
-        company.name, len(moving), found_in_gl, len(anomalies),
+        "Poll[%s]: %d moving, %d found in Quantum, %d anomalies",
+        company.name, len(moving), found_in_quantum, len(anomalies),
     )
-    if not_in_gl:
-        logger.info("Poll[%s]: %d moving units not in GreenLight (skipped): %s",
-                    company.name, len(not_in_gl), not_in_gl)
+    if not_in_quantum:
+        logger.info("Poll[%s]: %d moving units not in Quantum (skipped): %s",
+                    company.name, len(not_in_quantum), not_in_quantum)
 
     for anomaly in anomalies:
-        gl, gm = anomaly.greenlight, anomaly.gomotive
+        q, gm = anomaly.quantum, anomaly.gomotive
         # GoMotive's current coordinates = where the truck actually is right now.
         location = gm.coordinates_label
         existing = await store.get_active_event(company.id, anomaly.unit_number)
@@ -88,13 +88,13 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             logger.info("Poll[%s]: %s rolling again — closed paused span, new anomaly.",
                         company.name, anomaly.unit_number)
         disconnect_time = (
-            gl.last_report_time.isoformat() if gl.last_report_time else None
+            q.last_report_time.isoformat() if q.last_report_time else None
         )
         event = await store.open_event(
             company_id=company.id,
             unit_number=anomaly.unit_number,
-            vin=gl.vin,
-            driver=gl.driver,
+            vin=q.vin,
+            driver=q.driver,
             eld_disconnect_time=disconnect_time,
             speed=gm.speed,
             location=location,
@@ -112,7 +112,7 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
 
 
 # Re-log a still-failing identical error only once every N cycles, so a
-# persistent condition (e.g. GreenLight token not yet authorized) doesn't spam
+# persistent condition (e.g. Quantum token not yet authorized) doesn't spam
 # the log every poll while staying visible enough not to be forgotten.
 _REPEAT_REMINDER_EVERY = 12  # at 5-min polls, ~once per hour
 

@@ -112,30 +112,30 @@ async def add_gomotive(message: types.Message, state: FSMContext):
         await message.answer("Empty token — send the GoMotive token, or /cancel.")
         return
     await state.update_data(gomotive_token=token)
-    await state.set_state(AddCompany.greenlight_token)
+    await state.set_state(AddCompany.quantum_token)
     await message.answer(
-        "GoMotive token received ✅\n\nNow send the <b>GreenLight API token</b>.\n"
+        "GoMotive token received ✅\n\nNow send the <b>Quantum ELD API token</b>.\n"
         "<i>I'll delete that message too.</i>"
     )
 
 
-@dp.message_handler(state=AddCompany.greenlight_token)
-async def add_greenlight(message: types.Message, state: FSMContext):
+@dp.message_handler(state=AddCompany.quantum_token)
+async def add_quantum(message: types.Message, state: FSMContext):
     if await _intercept_command(message):
         return
     token = await _consume_secret(message)
     if not token:
-        await message.answer("Empty token — send the GreenLight token, or /cancel.")
+        await message.answer("Empty token — send the Quantum token, or /cancel.")
         return
-    await state.update_data(greenlight_token=token)
-    await state.set_state(AddCompany.greenlight_base_url)
+    await state.update_data(quantum_token=token)
+    await state.set_state(AddCompany.quantum_base_url)
     await message.answer(
-        "GreenLight token received ✅\n\nSend a custom <b>GreenLight base URL</b>, "
+        "Quantum token received ✅\n\nSend a custom <b>Quantum base URL</b>, "
         "or send <b>skip</b> to use the default."
     )
 
 
-@dp.message_handler(state=AddCompany.greenlight_base_url)
+@dp.message_handler(state=AddCompany.quantum_base_url)
 async def add_base_url(message: types.Message, state: FSMContext):
     if await _intercept_command(message):
         return
@@ -147,14 +147,14 @@ async def add_base_url(message: types.Message, state: FSMContext):
     company = await store.add_company(
         name=data["name"],
         gomotive_token=data["gomotive_token"],
-        greenlight_token=data["greenlight_token"],
-        greenlight_base_url=base_url,
+        quantum_token=data["quantum_token"],
+        quantum_base_url=base_url,
     )
     await message.answer(
         f"✅ Created company <b>{escape(company.name)}</b> (id {company.id}).\n"
         f"  GoMotive: <code>{_mask(company.gomotive_token)}</code>\n"
-        f"  GreenLight: <code>{_mask(company.greenlight_token)}</code>\n"
-        f"  Base URL: {escape(company.greenlight_base_url or '(default)')}\n\n"
+        f"  Quantum: <code>{_mask(company.quantum_token)}</code>\n"
+        f"  Base URL: {escape(company.quantum_base_url or '(default)')}\n\n"
         "It won't be polled until an alert chat is linked. Go to its alert group "
         f"and send:\n<code>/bindhere {escape(company.name)}</code>"
     )
@@ -215,7 +215,7 @@ async def list_companies(message: types.Message):
         lines.append(
             f"<b>[{c.id}] {escape(c.name)}</b> — {'active' if c.active else 'inactive'}, {polled}\n"
             f"   GoMotive <code>{_mask(c.gomotive_token)}</code> · "
-            f"GreenLight <code>{_mask(c.greenlight_token)}</code> · chat {chat}"
+            f"Quantum <code>{_mask(c.quantum_token)}</code> · chat {chat}"
         )
     await message.answer("\n".join(lines))
 

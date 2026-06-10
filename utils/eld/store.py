@@ -1,7 +1,7 @@
 """Async store for ELD-disconnection anomaly events.
 
 An "anomaly event" is a single continuous period during which a vehicle is
-disconnected on GreenLight ELD while still moving on GoMotive. While the event
+disconnected on Quantum ELD while still moving on GoMotive. While the event
 is ongoing it stays ``resolved = 0`` (an *active*/flagged vehicle); once the
 vehicle stops being anomalous it is marked resolved. This keeps a single row
 per ongoing event, which is what gives us alert de-duplication.
@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS companies (
     id                  BIGSERIAL PRIMARY KEY,
     name                TEXT             NOT NULL UNIQUE,
     gomotive_token      TEXT,
-    greenlight_token    TEXT,
-    greenlight_base_url TEXT,
+    quantum_token       TEXT,
+    quantum_base_url    TEXT,
     alert_chat_id       TEXT,
     active              INTEGER          NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -68,8 +68,8 @@ CREATE TABLE IF NOT EXISTS companies (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     name                TEXT    NOT NULL UNIQUE,
     gomotive_token      TEXT,
-    greenlight_token    TEXT,
-    greenlight_base_url TEXT,
+    quantum_token       TEXT,
+    quantum_base_url    TEXT,
     alert_chat_id       TEXT,
     active              INTEGER NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -128,14 +128,30 @@ _MIGRATIONS = [
     ("stopped_at", "TEXT"),
 ]
 
+# Column renames on a pre-existing `companies` table (CREATE TABLE above only
+# covers fresh installs). The provider was renamed GreenLight -> Quantum ELD.
+# RENAME COLUMN preserves the stored values, and the same carrier token works
+# against Quantum, so the only data fix needed is repointing any stored
+# GreenLight base URL at Quantum (see _OLD_BASE_URL_MARKER below) — done by
+# nulling it so it falls back to config.QUANTUM_BASE_URL.
+_COMPANY_RENAMES = [
+    ("greenlight_token", "quantum_token"),
+    ("greenlight_base_url", "quantum_base_url"),
+]
+
+# Stored base URLs left over from the GreenLight era are reset to NULL (fall back
+# to config.QUANTUM_BASE_URL) so existing companies point at Quantum. Idempotent:
+# after the first run no rows match. Matches the GreenLight host substring.
+_OLD_BASE_URL_MARKER = "%greenlighteld%"
+
 
 @dataclass
 class Company:
     id: int
     name: str
     gomotive_token: Optional[str] = None
-    greenlight_token: Optional[str] = None
-    greenlight_base_url: Optional[str] = None
+    quantum_token: Optional[str] = None
+    quantum_base_url: Optional[str] = None
     alert_chat_id: Optional[str] = None
     active: int = 1
     created_at: Optional[str] = None
@@ -251,6 +267,21 @@ async def init_db() -> None:
                 await conn.execute(
                     f"ALTER TABLE events ADD COLUMN IF NOT EXISTS {name} {ddl}"
                 )
+            company_cols = {
+                r["column_name"] for r in await conn.fetch(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'companies'"
+                )
+            }
+            for old, new in _COMPANY_RENAMES:
+                if old in company_cols and new not in company_cols:
+                    await conn.execute(
+                        f"ALTER TABLE companies RENAME COLUMN {old} TO {new}"
+                    )
+            await conn.execute(
+                "UPDATE companies SET quantum_base_url = NULL "
+                "WHERE quantum_base_url LIKE $1", _OLD_BASE_URL_MARKER,
+            )
             await conn.execute(_COMPANY_INDEX)
             try:
                 await conn.execute(_COMPANY_CHAT_UNIQUE_INDEX)
@@ -277,6 +308,17 @@ async def init_db() -> None:
             for name, ddl in _MIGRATIONS:
                 if name not in existing:
                     await db.execute(f"ALTER TABLE events ADD COLUMN {name} {ddl}")
+            cur = await db.execute("PRAGMA table_info(companies)")
+            company_cols = {row[1] for row in await cur.fetchall()}
+            for old, new in _COMPANY_RENAMES:
+                if old in company_cols and new not in company_cols:
+                    await db.execute(
+                        f"ALTER TABLE companies RENAME COLUMN {old} TO {new}"
+                    )
+            await db.execute(
+                "UPDATE companies SET quantum_base_url = NULL "
+                "WHERE quantum_base_url LIKE ?", (_OLD_BASE_URL_MARKER,),
+            )
             await db.execute(_COMPANY_INDEX)
             try:
                 await db.execute(_COMPANY_CHAT_UNIQUE_INDEX)
@@ -307,7 +349,7 @@ async def _seed_default_company() -> None:
     if existing is not None:
         return
 
-    has_legacy_tokens = bool(config.GOMOTIVE_TOKEN and config.GREENLIGHT_TOKEN)
+    has_legacy_tokens = bool(config.GOMOTIVE_TOKEN and config.QUANTUM_TOKEN)
     orphan = await _fetchrow("SELECT id FROM events WHERE company_id IS NULL LIMIT 1")
     has_orphan_events = orphan is not None
     if not has_legacy_tokens and not has_orphan_events:
@@ -316,8 +358,8 @@ async def _seed_default_company() -> None:
     company = await add_company(
         name="default",
         gomotive_token=config.GOMOTIVE_TOKEN or None,
-        greenlight_token=config.GREENLIGHT_TOKEN or None,
-        greenlight_base_url=config.GREENLIGHT_BASE_URL,
+        quantum_token=config.QUANTUM_TOKEN or None,
+        quantum_base_url=config.QUANTUM_BASE_URL,
     )
     if config.ALERT_CHAT_ID:
         await bind_company_chat(company.id, config.ALERT_CHAT_ID)
@@ -327,7 +369,7 @@ async def _seed_default_company() -> None:
     if not has_legacy_tokens:
         logger.warning(
             "Adopted pre-existing event history into a token-less 'default' "
-            "company (legacy GOMOTIVE_TOKEN/GREENLIGHT_TOKEN are not set). Its "
+            "company (legacy GOMOTIVE_TOKEN/QUANTUM_TOKEN are not set). Its "
             "history is preserved but it won't be polled until you set its tokens "
             "via /addcompany or restore the seed env vars."
         )
@@ -403,16 +445,16 @@ async def add_company(
     *,
     name: str,
     gomotive_token: Optional[str],
-    greenlight_token: Optional[str],
-    greenlight_base_url: Optional[str] = None,
+    quantum_token: Optional[str],
+    quantum_base_url: Optional[str] = None,
 ) -> Company:
     """Create a company and return it. ``alert_chat_id`` is left NULL — bind it to
     a Telegram group with :func:`bind_company_chat` before it will be polled."""
     now = datetime.utcnow().isoformat(timespec="seconds")
     company_id = await _insert_returning_id(
-        "INSERT INTO companies (name, gomotive_token, greenlight_token, "
-        "greenlight_base_url, created_at) VALUES ($1, $2, $3, $4, $5)",
-        name, gomotive_token, greenlight_token, greenlight_base_url, now,
+        "INSERT INTO companies (name, gomotive_token, quantum_token, "
+        "quantum_base_url, created_at) VALUES ($1, $2, $3, $4, $5)",
+        name, gomotive_token, quantum_token, quantum_base_url, now,
     )
     row = await _fetchrow("SELECT * FROM companies WHERE id = $1", company_id)
     return _row_to_company(row)

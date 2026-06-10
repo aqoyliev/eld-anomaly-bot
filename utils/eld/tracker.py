@@ -2,7 +2,7 @@
 
 Runs on a faster cadence than the 5-min sweep (default every 2 min). An anomaly
 counts only moving-while-disconnected time, so for each active anomaly it:
-  1. checks GreenLight — if the ELD reports fresh again, the device reconnected,
+  1. checks Quantum — if the ELD reports fresh again, the device reconnected,
      so the anomaly is resolved (all-clear);
   2. re-queries GoMotive by vehicle id (cheap, just the flagged units) and, by
      comparing the position to the previous check, decides whether the truck has
@@ -26,7 +26,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from data import config
-from . import gomotive, greenlight, store
+from . import gomotive, quantumeld, store
 from .formatting import format_reconnected, format_reminder, format_stopped
 
 logger = logging.getLogger(__name__)
@@ -69,9 +69,9 @@ async def track_once(bot: Bot, company: store.Company) -> None:
     if not events:
         return
 
-    gl_base_url = company.greenlight_base_url or config.GREENLIGHT_BASE_URL
+    quantum_base_url = company.quantum_base_url or config.QUANTUM_BASE_URL
 
-    # Targeted GoMotive movement for just the flagged units + GreenLight freshness.
+    # Targeted GoMotive movement for just the flagged units + Quantum freshness.
     ids = [e.motive_vehicle_id for e in events if e.motive_vehicle_id]
     gm_map = (
         await gomotive.fetch_by_ids(
@@ -79,16 +79,16 @@ async def track_once(bot: Bot, company: store.Company) -> None:
         )
         if ids else {}
     )
-    gl_map = await greenlight.fetch_vehicles(
-        [e.unit_number for e in events], company.greenlight_token, gl_base_url
+    quantum_map = await quantumeld.fetch_vehicles(
+        [e.unit_number for e in events], company.quantum_token, quantum_base_url
     )
     now = datetime.utcnow()
 
     for e in events:
-        # 1) Reconnected? A fresh GreenLight report means the ELD is back online.
-        gl = gl_map.get(e.unit_number)
-        if gl is not None and not greenlight.is_disconnected(
-            gl, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
+        # 1) Reconnected? A fresh Quantum report means the ELD is back online.
+        q = quantum_map.get(e.unit_number)
+        if q is not None and not quantumeld.is_disconnected(
+            q, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
         ):
             await store.resolve_event(e.id)
             # All-clear goes out even if reminders were muted.
