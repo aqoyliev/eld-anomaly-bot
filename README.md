@@ -82,7 +82,7 @@ companies (those that are active **and** bound to an alert chat).
 **Adding a company** (all in Telegram, as an admin):
 
 1. DM the bot `/addcompany` and follow the prompts (name → GoMotive token →
-   Quantum token → optional base URL). The bot deletes the messages
+   Quantum token). The bot deletes the messages
    containing tokens.
 2. Add the bot to that company's Telegram alert group and send
    `/bindhere <name>` there. It starts being polled on the next cycle.

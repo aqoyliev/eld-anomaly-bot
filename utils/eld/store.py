@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS companies (
     name                TEXT             NOT NULL UNIQUE,
     gomotive_token      TEXT,
     quantum_token       TEXT,
-    quantum_base_url    TEXT,
     alert_chat_id       TEXT,
     active              INTEGER          NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -69,7 +68,6 @@ CREATE TABLE IF NOT EXISTS companies (
     name                TEXT    NOT NULL UNIQUE,
     gomotive_token      TEXT,
     quantum_token       TEXT,
-    quantum_base_url    TEXT,
     alert_chat_id       TEXT,
     active              INTEGER NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -128,21 +126,19 @@ _MIGRATIONS = [
     ("stopped_at", "TEXT"),
 ]
 
-# Column renames on a pre-existing `companies` table (CREATE TABLE above only
-# covers fresh installs). The provider was renamed GreenLight -> Quantum ELD.
-# RENAME COLUMN preserves the stored values, and the same carrier token works
-# against Quantum, so the only data fix needed is repointing any stored
-# GreenLight base URL at Quantum (see _OLD_BASE_URL_MARKER below) — done by
-# nulling it so it falls back to config.QUANTUM_BASE_URL.
+# Migrations on a pre-existing `companies` table (CREATE TABLE above only covers
+# fresh installs). The provider was renamed GreenLight -> Quantum ELD and the
+# same carrier token works against Quantum, so the token column is renamed in
+# place (value preserved). RENAME COLUMN needs SQLite >= 3.25.
 _COMPANY_RENAMES = [
     ("greenlight_token", "quantum_token"),
-    ("greenlight_base_url", "quantum_base_url"),
 ]
 
-# Stored base URLs left over from the GreenLight era are reset to NULL (fall back
-# to config.QUANTUM_BASE_URL) so existing companies point at Quantum. Idempotent:
-# after the first run no rows match. Matches the GreenLight host substring.
-_OLD_BASE_URL_MARKER = "%greenlighteld%"
+# The per-company base-URL override was dropped: every company uses the single
+# config.QUANTUM_BASE_URL. Drop the column under either name if a pre-existing DB
+# still has it (values were NULL or the old GreenLight default — no real loss).
+# DROP COLUMN needs SQLite >= 3.35; on Postgres it's DROP COLUMN IF EXISTS.
+_COMPANY_DROPS = ["greenlight_base_url", "quantum_base_url"]
 
 
 @dataclass
@@ -151,7 +147,6 @@ class Company:
     name: str
     gomotive_token: Optional[str] = None
     quantum_token: Optional[str] = None
-    quantum_base_url: Optional[str] = None
     alert_chat_id: Optional[str] = None
     active: int = 1
     created_at: Optional[str] = None
@@ -278,10 +273,10 @@ async def init_db() -> None:
                     await conn.execute(
                         f"ALTER TABLE companies RENAME COLUMN {old} TO {new}"
                     )
-            await conn.execute(
-                "UPDATE companies SET quantum_base_url = NULL "
-                "WHERE quantum_base_url LIKE $1", _OLD_BASE_URL_MARKER,
-            )
+            for col in _COMPANY_DROPS:
+                await conn.execute(
+                    f"ALTER TABLE companies DROP COLUMN IF EXISTS {col}"
+                )
             await conn.execute(_COMPANY_INDEX)
             try:
                 await conn.execute(_COMPANY_CHAT_UNIQUE_INDEX)
@@ -315,10 +310,11 @@ async def init_db() -> None:
                     await db.execute(
                         f"ALTER TABLE companies RENAME COLUMN {old} TO {new}"
                     )
-            await db.execute(
-                "UPDATE companies SET quantum_base_url = NULL "
-                "WHERE quantum_base_url LIKE ?", (_OLD_BASE_URL_MARKER,),
-            )
+                    company_cols.discard(old)
+                    company_cols.add(new)
+            for col in _COMPANY_DROPS:
+                if col in company_cols:
+                    await db.execute(f"ALTER TABLE companies DROP COLUMN {col}")
             await db.execute(_COMPANY_INDEX)
             try:
                 await db.execute(_COMPANY_CHAT_UNIQUE_INDEX)
@@ -359,7 +355,6 @@ async def _seed_default_company() -> None:
         name="default",
         gomotive_token=config.GOMOTIVE_TOKEN or None,
         quantum_token=config.QUANTUM_TOKEN or None,
-        quantum_base_url=config.QUANTUM_BASE_URL,
     )
     if config.ALERT_CHAT_ID:
         await bind_company_chat(company.id, config.ALERT_CHAT_ID)
@@ -446,15 +441,14 @@ async def add_company(
     name: str,
     gomotive_token: Optional[str],
     quantum_token: Optional[str],
-    quantum_base_url: Optional[str] = None,
 ) -> Company:
     """Create a company and return it. ``alert_chat_id`` is left NULL — bind it to
     a Telegram group with :func:`bind_company_chat` before it will be polled."""
     now = datetime.utcnow().isoformat(timespec="seconds")
     company_id = await _insert_returning_id(
         "INSERT INTO companies (name, gomotive_token, quantum_token, "
-        "quantum_base_url, created_at) VALUES ($1, $2, $3, $4, $5)",
-        name, gomotive_token, quantum_token, quantum_base_url, now,
+        "created_at) VALUES ($1, $2, $3, $4)",
+        name, gomotive_token, quantum_token, now,
     )
     row = await _fetchrow("SELECT * FROM companies WHERE id = $1", company_id)
     return _row_to_company(row)

@@ -74,9 +74,7 @@ async def run(company_name, unit):
         if company is None:
             print(f"No company named {company_name!r} in the DB.")
             return 1
-        base_url = company.quantum_base_url or config.QUANTUM_BASE_URL
-        if base_url == "null" or not base_url:
-            base_url = config.QUANTUM_BASE_URL
+        base_url = config.QUANTUM_BASE_URL
         print(f"Company id={company.id} name={company.name!r}")
         print(f"  gomotive_token : {company.gomotive_token}")
         print(f"  quantum_token  : {company.quantum_token}")

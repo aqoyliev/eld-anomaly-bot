@@ -7,4 +7,3 @@ class AddCompany(StatesGroup):
     name = State()
     gomotive_token = State()
     quantum_token = State()
-    quantum_base_url = State()

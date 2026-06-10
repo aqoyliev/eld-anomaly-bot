@@ -69,7 +69,7 @@ async def track_once(bot: Bot, company: store.Company) -> None:
     if not events:
         return
 
-    quantum_base_url = company.quantum_base_url or config.QUANTUM_BASE_URL
+    quantum_base_url = config.QUANTUM_BASE_URL
 
     # Targeted GoMotive movement for just the flagged units + Quantum freshness.
     ids = [e.motive_vehicle_id for e in events if e.motive_vehicle_id]

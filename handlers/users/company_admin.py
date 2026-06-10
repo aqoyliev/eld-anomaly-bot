@@ -127,34 +127,18 @@ async def add_quantum(message: types.Message, state: FSMContext):
     if not token:
         await message.answer("Empty token — send the Quantum token, or /cancel.")
         return
-    await state.update_data(quantum_token=token)
-    await state.set_state(AddCompany.quantum_base_url)
-    await message.answer(
-        "Quantum token received ✅\n\nSend a custom <b>Quantum base URL</b>, "
-        "or send <b>skip</b> to use the default."
-    )
-
-
-@dp.message_handler(state=AddCompany.quantum_base_url)
-async def add_base_url(message: types.Message, state: FSMContext):
-    if await _intercept_command(message):
-        return
-    raw = (message.text or "").strip()
-    base_url = None if raw.lower() in ("skip", "-", "") else raw
     data = await state.get_data()
     await state.finish()
 
     company = await store.add_company(
         name=data["name"],
         gomotive_token=data["gomotive_token"],
-        quantum_token=data["quantum_token"],
-        quantum_base_url=base_url,
+        quantum_token=token,
     )
     await message.answer(
         f"✅ Created company <b>{escape(company.name)}</b> (id {company.id}).\n"
         f"  GoMotive: <code>{_mask(company.gomotive_token)}</code>\n"
-        f"  Quantum: <code>{_mask(company.quantum_token)}</code>\n"
-        f"  Base URL: {escape(company.quantum_base_url or '(default)')}\n\n"
+        f"  Quantum: <code>{_mask(company.quantum_token)}</code>\n\n"
         "It won't be polled until an alert chat is linked. Go to its alert group "
         f"and send:\n<code>/bindhere {escape(company.name)}</code>"
     )

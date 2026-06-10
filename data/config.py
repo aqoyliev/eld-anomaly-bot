@@ -21,8 +21,9 @@ IP = env.str("ip", "")  # Hosting IP address (unused; long-polling bot)
 # companies, init_db() seeds a single "default" company from these values so the
 # original single-company production setup keeps working untouched. New companies
 # are added with the admin commands instead. The two *_BASE_URL constants are
-# still used as the GoMotive base URL (constant for all companies) and the
-# fallback Quantum ELD base URL.
+# the GoMotive and Quantum ELD base URLs — both constant for all companies (the
+# per-company Quantum base-URL override was removed; all companies use the same
+# Quantum endpoint).
 
 # Quantum ELD vehicle-location API
 QUANTUM_BASE_URL = env.str(

@@ -34,7 +34,7 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
                        company.name)
         return
 
-    quantum_base_url = company.quantum_base_url or config.QUANTUM_BASE_URL
+    quantum_base_url = config.QUANTUM_BASE_URL
 
     # 1. Ask GoMotive which vehicles are moving right now. (GoMotive's base URL is
     #    a constant, so it stays in config; only the token is per-company.)
