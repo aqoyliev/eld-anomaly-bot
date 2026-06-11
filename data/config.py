@@ -55,6 +55,12 @@ ELD_STALE_THRESHOLD = env.int("ELD_STALE_THRESHOLD", 600)
 # Speed (mph) above which a vehicle is considered "moving" on GoMotive.
 MOVING_SPEED_THRESHOLD = env.float("MOVING_SPEED_THRESHOLD", 0.0)
 
+# Samsara's stats snapshot returns the LAST KNOWN GPS reading even if the
+# gateway has been offline for months — a dead unit can sit frozen at 60 mph
+# forever. A reading older than this many seconds is not treated as current
+# movement (default 15 min; a live Samsara gateway reports sub-minute).
+SAMSARA_GPS_FRESHNESS = env.int("SAMSARA_GPS_FRESHNESS", 900)
+
 # --- Tracking of already-flagged (disconnected) units ------------------------
 # How often the tracker re-checks disconnected units, in seconds (default 2 min).
 # It re-queries GoMotive by vehicle id (cheap) plus Quantum for reconnection.

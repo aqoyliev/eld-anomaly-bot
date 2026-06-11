@@ -17,7 +17,7 @@ Docs: https://developers.samsara.com/reference/getvehiclestats
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import aiohttp
@@ -130,10 +130,35 @@ async def _fetch_stats(
     return out
 
 
+def _is_fresh(v: SamsaraVehicle, max_age_seconds: Optional[int]) -> bool:
+    """Whether the vehicle's GPS reading is recent enough to count as a CURRENT
+    observation. The stats snapshot returns the last-known reading even for a
+    gateway that died months ago (frozen at highway speed!), so a stale reading
+    must not be treated as the truck moving right now. A missing reading time
+    can't be confirmed current, so it is stale too."""
+    if max_age_seconds is None:
+        return True
+    if v.time is None:
+        return False
+    now = datetime.now(timezone.utc)
+    return (now - v.time).total_seconds() <= max_age_seconds
+
+
 async def fetch_moving_vehicles(
-    token: str, base_url: str, threshold_mph: float = 0.0
+    token: str,
+    base_url: str,
+    threshold_mph: float = 0.0,
+    freshness_seconds: Optional[int] = None,
 ) -> Dict[str, SamsaraVehicle]:
-    """Return {unit_number: vehicle} for vehicles moving above the threshold."""
+    """Return {unit_number: vehicle} for vehicles moving above the threshold.
+
+    ``freshness_seconds`` drops vehicles whose reading is older than that —
+    REQUIRED for anomaly detection (the poller passes
+    ``config.SAMSARA_GPS_FRESHNESS``): verified live, a fleet showed 67
+    vehicles with speed > 0 of which only 7 had a current reading; the rest
+    were dead/deactivated gateways frozen at speed, each a permanent false
+    alarm. ``None`` (no filter) is for diagnostics like samsara_probe.
+    """
     if not token:
         logger.warning("Samsara token not configured; skipping Samsara poll.")
         return {}
@@ -145,13 +170,19 @@ async def fetch_moving_vehicles(
         if v is not None:
             vehicles[v.unit_number] = v
 
-    logger.info("Samsara: %d vehicles", len(vehicles))
-
-    return {
+    moving = {
         unit: v
         for unit, v in vehicles.items()
         if v.speed is not None and v.speed > threshold_mph
     }
+    fresh = {
+        unit: v for unit, v in moving.items() if _is_fresh(v, freshness_seconds)
+    }
+    logger.info(
+        "Samsara: %d vehicles, %d at speed, %d with a fresh reading (counted "
+        "as moving)", len(vehicles), len(moving), len(fresh),
+    )
+    return fresh
 
 
 async def fetch_by_ids(

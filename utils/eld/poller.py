@@ -58,6 +58,9 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             company.samsara_token,
             config.SAMSARA_BASE_URL,
             threshold_mph=config.MOVING_SPEED_THRESHOLD,
+            # Required: Samsara's snapshot keeps dead gateways frozen at their
+            # last speed, so without this every one of them is a false anomaly.
+            freshness_seconds=config.SAMSARA_GPS_FRESHNESS,
         )).items():
             moving.setdefault(unit, v)
     if not moving:

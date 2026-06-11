@@ -63,10 +63,19 @@ async def probe(token: str, raw: bool) -> int:
 
     print(f"\nvehicles with a GPS speed reading: {len(vehicles)}")
     for unit, v in sorted(vehicles.items()):
+        fresh = "" if samsara._is_fresh(v, config.SAMSARA_GPS_FRESHNESS) \
+            else "  [STALE reading]"
         print(f"  {unit:<12} id={v.vehicle_id}  {v.speed or 0:.0f} mph  "
-              f"@ {v.coordinates_label}  ({v.time})")
-    moving = [u for u, v in vehicles.items() if (v.speed or 0) > 0]
-    print(f"\nmoving now: {len(moving)}" + (f" — {moving}" if moving else ""))
+              f"@ {v.coordinates_label}  ({v.time}){fresh}")
+
+    # Mirror the poller: at speed AND a fresh reading. A dead gateway sits
+    # frozen at its last speed forever, so speed alone is meaningless.
+    at_speed = {u: v for u, v in vehicles.items() if (v.speed or 0) > 0}
+    moving = [u for u, v in at_speed.items()
+              if samsara._is_fresh(v, config.SAMSARA_GPS_FRESHNESS)]
+    print(f"\nat speed: {len(at_speed)}, of those with a fresh reading "
+          f"(= moving now, what the poller would use): {len(moving)}"
+          + (f" — {sorted(moving)}" if moving else ""))
     return 0
 
 
