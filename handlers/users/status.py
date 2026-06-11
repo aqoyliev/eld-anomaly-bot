@@ -15,12 +15,25 @@ def _moving(events):
     return [e for e in events if e.stopped_at is None]
 
 
+async def _company_blocks(companies):
+    """One block per company that has moving flagged units (empty ones skipped)."""
+    blocks = []
+    for c in companies:
+        events = _moving(await store.get_active_events(c.id))
+        if not events:
+            continue
+        block = [f"<b>{c.name} — moving & disconnected ({len(events)}):</b>"]
+        block += [format_status_line(e) for e in events]
+        blocks.append("\n".join(block))
+    return blocks
+
+
 @dp.message_handler(Command("status"))
 async def show_status(message: types.Message):
-    company = await store.get_company_by_chat(message.chat.id)
+    companies = await store.get_companies_by_chat(message.chat.id)
 
-    if company is not None:
-        events = _moving(await store.get_active_events(company.id))
+    if len(companies) == 1:
+        events = _moving(await store.get_active_events(companies[0].id))
         if not events:
             await message.answer("✅ No moving units currently disconnected.")
             return
@@ -29,16 +42,18 @@ async def show_status(message: types.Message):
         await message.answer("\n".join(lines))
         return
 
+    if companies:
+        # Several companies share this chat: one block per company.
+        blocks = await _company_blocks(companies)
+        if not blocks:
+            await message.answer("✅ No moving units currently disconnected.")
+            return
+        await message.answer("\n\n".join(blocks))
+        return
+
     if is_admin_or_viewer(message.from_user):
         # Unbound chat (e.g. an admin/viewer DM): aggregate across all companies.
-        blocks = []
-        for c in await store.active_companies():
-            events = _moving(await store.get_active_events(c.id))
-            if not events:
-                continue
-            block = [f"<b>{c.name} — moving & disconnected ({len(events)}):</b>"]
-            block += [format_status_line(e) for e in events]
-            blocks.append("\n".join(block))
+        blocks = await _company_blocks(await store.active_companies())
         if not blocks:
             await message.answer(
                 "✅ No moving units currently disconnected (any company)."

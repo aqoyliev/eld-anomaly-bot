@@ -69,7 +69,8 @@ Disconnected on Quantum ELD but still moving on GoMotive.
 | Command        | Description                                                    |
 |----------------|----------------------------------------------------------------|
 | `/addcompany`  | Step-by-step wizard to create a company; token messages are auto-deleted |
-| `/bindhere`    | Link the current chat as a company's alert group: `/bindhere <name>` |
+| `/bindhere`    | Link the current chat as a company's alert group: `/bindhere <name>` (a chat can host several companies) |
+| `/unbindhere`  | Unlink a company from the current chat: `/unbindhere [name]`  |
 | `/companies`   | List all companies (tokens masked)                             |
 | `/activate`    | Re-activate a company: `/activate <name or id>`               |
 | `/deactivate`  | Stop polling a company (history kept): `/deactivate <name or id>` |
@@ -92,6 +93,8 @@ companies (those that are active **and** bound to an alert chat).
    containing tokens.
 2. Add the bot to that company's Telegram alert group and send
    `/bindhere <name>` there. It starts being polled on the next cycle.
+   Several companies may share one group — `/bindhere` each of them there;
+   `/status` and `/history` then show a block per company.
 
 **Migration is automatic:** on first start against a database that has no
 companies, the bot seeds a single `default` company from the legacy

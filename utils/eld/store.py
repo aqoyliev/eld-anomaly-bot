@@ -107,15 +107,10 @@ _COMPANY_INDEX = (
     "ON events (company_id, unit_number, resolved)"
 )
 
-# Enforce the one-chat-one-company invariant at the DB level (a chat maps to a
-# single company; /bindhere also guards this in app code). Partial so multiple
-# unbound companies (alert_chat_id IS NULL) are still allowed. Same syntax on
-# Postgres and SQLite. Best-effort: if a legacy DB already holds a duplicate
-# binding, creation is skipped with a warning rather than failing startup.
-_COMPANY_CHAT_UNIQUE_INDEX = (
-    "CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_alert_chat "
-    "ON companies (alert_chat_id) WHERE alert_chat_id IS NOT NULL"
-)
+# A chat may host several companies (e.g. two carriers sharing one dispatch
+# group), so the old one-chat-one-company unique index is gone; this drops it
+# from legacy DBs. Same syntax on Postgres and SQLite.
+_COMPANY_CHAT_UNIQUE_INDEX_DROP = "DROP INDEX IF EXISTS uq_companies_alert_chat"
 
 # Columns added after the first release. CREATE TABLE above only covers fresh
 # installs, so init_db also applies these to a pre-existing table, idempotently.
@@ -301,14 +296,7 @@ async def init_db() -> None:
                     f"ALTER TABLE companies ADD COLUMN IF NOT EXISTS {name} {ddl}"
                 )
             await conn.execute(_COMPANY_INDEX)
-            try:
-                await conn.execute(_COMPANY_CHAT_UNIQUE_INDEX)
-            except Exception:
-                logger.warning(
-                    "Could not create unique index on companies.alert_chat_id "
-                    "(a duplicate binding may already exist); skipping.",
-                    exc_info=True,
-                )
+            await conn.execute(_COMPANY_CHAT_UNIQUE_INDEX_DROP)
     else:
         import aiosqlite
 
@@ -343,14 +331,7 @@ async def init_db() -> None:
                 if name not in company_cols:
                     await db.execute(f"ALTER TABLE companies ADD COLUMN {name} {ddl}")
             await db.execute(_COMPANY_INDEX)
-            try:
-                await db.execute(_COMPANY_CHAT_UNIQUE_INDEX)
-            except Exception:
-                logger.warning(
-                    "Could not create unique index on companies.alert_chat_id "
-                    "(a duplicate binding may already exist); skipping.",
-                    exc_info=True,
-                )
+            await db.execute(_COMPANY_CHAT_UNIQUE_INDEX_DROP)
             await db.commit()
 
     await _seed_default_company()
@@ -512,11 +493,13 @@ async def get_company_by_name(name: str) -> Optional[Company]:
     return _row_to_company(row) if row else None
 
 
-async def get_company_by_chat(chat_id) -> Optional[Company]:
-    row = await _fetchrow(
-        "SELECT * FROM companies WHERE alert_chat_id = $1", str(chat_id)
+async def get_companies_by_chat(chat_id) -> List[Company]:
+    """All companies bound to this chat — a chat may host more than one."""
+    rows = await _fetch(
+        "SELECT * FROM companies WHERE alert_chat_id = $1 ORDER BY id",
+        str(chat_id),
     )
-    return _row_to_company(row) if row else None
+    return [_row_to_company(r) for r in rows]
 
 
 async def list_companies(active_only: bool = False) -> List[Company]:

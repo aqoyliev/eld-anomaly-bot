@@ -14,6 +14,7 @@ DEFAULT_COMMANDS = [
 ADMIN_COMMANDS = DEFAULT_COMMANDS + [
     types.BotCommand("addcompany", "Add a company (wizard)"),
     types.BotCommand("bindhere", "Link this chat to a company"),
+    types.BotCommand("unbindhere", "Unlink a company from this chat"),
     types.BotCommand("companies", "List companies"),
     types.BotCommand("activate", "Activate a company"),
     types.BotCommand("deactivate", "Deactivate a company"),

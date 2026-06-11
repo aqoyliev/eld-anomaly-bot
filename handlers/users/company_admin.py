@@ -2,7 +2,9 @@
 
 Commands (restricted to config.ADMINS via the IsAdmin filter):
     /addcompany   step-by-step wizard to create a company (tokens auto-deleted)
-    /bindhere     link the current chat as a company's alert group
+    /bindhere     link the current chat as a company's alert group (a chat may
+                  host several companies)
+    /unbindhere   unlink a company from the current chat
     /companies    list all companies (tokens masked)
     /activate     re-activate a company (start polling it)
     /deactivate   soft-delete a company (stop polling, keep history)
@@ -222,23 +224,57 @@ async def bind_here(message: types.Message):
         await message.answer(f"No company found for <b>{escape(arg)}</b>.")
         return
 
-    existing = await store.get_company_by_chat(message.chat.id)
-    if existing is not None and existing.id != company.id:
-        # A chat maps to exactly one company — unbind the previous one so it
-        # isn't left sharing this chat (and silently double-alerting).
-        await store.bind_company_chat(existing.id, None)
+    bound = await store.get_companies_by_chat(message.chat.id)
+    if any(c.id == company.id for c in bound):
         await message.answer(
-            f"⚠️ This chat was linked to <b>{escape(existing.name)}</b> — unlinking it "
-            f"and re-linking to <b>{escape(company.name)}</b>. "
-            f"(<b>{escape(existing.name)}</b> now has "
-            "no alert chat and won't be polled until you /bindhere it elsewhere.)"
+            f"<b>{escape(company.name)}</b> is already linked to this chat."
         )
+        return
 
     await store.bind_company_chat(company.id, message.chat.id)
     state_note = "" if company.active else " (note: it's deactivated — /activate it to poll)"
+    shared_note = ""
+    if bound:
+        names = ", ".join(f"<b>{escape(c.name)}</b>" for c in bound)
+        shared_note = f"\nThis chat also receives alerts for {names}."
     await message.answer(
         f"✅ Linked this chat (<code>{message.chat.id}</code>) to <b>{escape(company.name)}</b>. "
-        f"Alerts will arrive here from the next poll cycle.{state_note}"
+        f"Alerts will arrive here from the next poll cycle.{state_note}{shared_note}"
+    )
+
+
+# --- /unbindhere ---------------------------------------------------------------
+
+@dp.message_handler(IsAdmin(), commands=["unbindhere"], state="*")
+async def unbind_here(message: types.Message):
+    bound = await store.get_companies_by_chat(message.chat.id)
+    if not bound:
+        await message.answer("No company is linked to this chat.")
+        return
+
+    arg = message.get_args().strip()
+    if arg:
+        company = await _resolve(arg)
+        if company is None or all(c.id != company.id for c in bound):
+            names = ", ".join(escape(c.name) for c in bound)
+            await message.answer(
+                f"<b>{escape(arg)}</b> isn't linked to this chat. Linked here: {names}."
+            )
+            return
+    elif len(bound) == 1:
+        company = bound[0]
+    else:
+        names = ", ".join(escape(c.name) for c in bound)
+        await message.answer(
+            "Several companies are linked to this chat — say which one:\n"
+            f"<code>/unbindhere &lt;company name or id&gt;</code>\n\nLinked here: {names}."
+        )
+        return
+
+    await store.bind_company_chat(company.id, None)
+    await message.answer(
+        f"✅ Unlinked <b>{escape(company.name)}</b> from this chat. It now has no "
+        "alert chat and won't be polled until you /bindhere it somewhere."
     )
 
 

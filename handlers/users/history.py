@@ -9,12 +9,25 @@ from utils.eld.formatting import format_history_line
 HISTORY_LIMIT = 20
 
 
+async def _company_blocks(companies):
+    """One block per company that has recorded events (empty ones skipped)."""
+    blocks = []
+    for c in companies:
+        events = await store.get_recent_events(c.id, limit=HISTORY_LIMIT)
+        if not events:
+            continue
+        block = [f"<b>{c.name} — recent events (last {len(events)}):</b>"]
+        block += [format_history_line(e) for e in events]
+        blocks.append("\n".join(block))
+    return blocks
+
+
 @dp.message_handler(Command("history"))
 async def show_history(message: types.Message):
-    company = await store.get_company_by_chat(message.chat.id)
+    companies = await store.get_companies_by_chat(message.chat.id)
 
-    if company is not None:
-        events = await store.get_recent_events(company.id, limit=HISTORY_LIMIT)
+    if len(companies) == 1:
+        events = await store.get_recent_events(companies[0].id, limit=HISTORY_LIMIT)
         if not events:
             await message.answer("No disconnection events recorded yet.")
             return
@@ -23,16 +36,18 @@ async def show_history(message: types.Message):
         await message.answer("\n".join(lines))
         return
 
+    if companies:
+        # Several companies share this chat: one block per company.
+        blocks = await _company_blocks(companies)
+        if not blocks:
+            await message.answer("No disconnection events recorded yet.")
+            return
+        await message.answer("\n\n".join(blocks))
+        return
+
     if is_admin_or_viewer(message.from_user):
         # Unbound chat (e.g. an admin/viewer DM): aggregate across all companies.
-        blocks = []
-        for c in await store.active_companies():
-            events = await store.get_recent_events(c.id, limit=HISTORY_LIMIT)
-            if not events:
-                continue
-            block = [f"<b>{c.name} — recent events (last {len(events)}):</b>"]
-            block += [format_history_line(e) for e in events]
-            blocks.append("\n".join(block))
+        blocks = await _company_blocks(await store.active_companies())
         if not blocks:
             await message.answer("No disconnection events recorded yet (any company).")
             return
