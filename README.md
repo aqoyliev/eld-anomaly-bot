@@ -146,7 +146,7 @@ All settings live in `.env` (gitignored, never committed):
 | `ALERT_CHAT_ID`          | first admin                                      | **Seed-only:** alert chat for the `default` company. New companies are bound with `/bindhere`. |
 | `POLL_INTERVAL`          | `300`                                            | Seconds between poll cycles |
 | `ELD_STALE_THRESHOLD`    | `600`                                            | Seconds before a Quantum report counts as disconnected |
-| `MOVING_SPEED_THRESHOLD` | `15`                                             | mph above which a vehicle is "moving" |
+| `MOVING_SPEED_THRESHOLD` | `10`                                             | mph above which a vehicle is "moving" |
 | `DATABASE_URL`           | — (unset)                                        | Postgres DSN. If set, the bot uses PostgreSQL (asyncpg); Railway's Postgres plugin injects this. Unset → SQLite. |
 | `DB_PATH`                | `db.sqlite3`                                     | SQLite database file (used when `DATABASE_URL` is unset) |
 

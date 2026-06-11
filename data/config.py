@@ -55,7 +55,7 @@ ELD_STALE_THRESHOLD = env.int("ELD_STALE_THRESHOLD", 600)
 # Speed (mph) above which a vehicle is considered "moving" by the movement
 # providers (GoMotive/Samsara). Anything at or below it is ignored by anomaly
 # detection — set high enough to skip GPS jitter and yard/dock maneuvering.
-MOVING_SPEED_THRESHOLD = env.float("MOVING_SPEED_THRESHOLD", 15.0)
+MOVING_SPEED_THRESHOLD = env.float("MOVING_SPEED_THRESHOLD", 10.0)
 
 # Samsara's stats snapshot returns the LAST KNOWN GPS reading even if the
 # gateway has been offline for months — a dead unit can sit frozen at 60 mph
