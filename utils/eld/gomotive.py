@@ -47,6 +47,10 @@ class GoMotiveVehicle:
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
+    # Stamped onto events so the tracker knows which API to re-query (the
+    # Samsara client carries "samsara"; see utils/eld/samsara.py).
+    provider = "gomotive"
+
     @property
     def coordinates_label(self) -> str:
         if self.latitude is not None and self.longitude is not None:

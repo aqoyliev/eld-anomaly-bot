@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS companies (
     id                  BIGSERIAL PRIMARY KEY,
     name                TEXT             NOT NULL UNIQUE,
     gomotive_token      TEXT,
+    samsara_token       TEXT,
     quantum_token       TEXT,
     alert_chat_id       TEXT,
     active              INTEGER          NOT NULL DEFAULT 1,
@@ -57,7 +58,8 @@ CREATE TABLE IF NOT EXISTS events (
     stop_notified       INTEGER          NOT NULL DEFAULT 0,
     reminders_muted     INTEGER          NOT NULL DEFAULT 0,
     company_id          INTEGER,
-    stopped_at          TEXT
+    stopped_at          TEXT,
+    provider            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS companies (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     name                TEXT    NOT NULL UNIQUE,
     gomotive_token      TEXT,
+    samsara_token       TEXT,
     quantum_token       TEXT,
     alert_chat_id       TEXT,
     active              INTEGER NOT NULL DEFAULT 1,
@@ -91,7 +94,8 @@ CREATE TABLE IF NOT EXISTS events (
     stop_notified       INTEGER NOT NULL DEFAULT 0,
     reminders_muted     INTEGER NOT NULL DEFAULT 0,
     company_id          INTEGER,
-    stopped_at          TEXT
+    stopped_at          TEXT,
+    provider            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
@@ -124,6 +128,17 @@ _MIGRATIONS = [
     ("reminders_muted", "INTEGER NOT NULL DEFAULT 0"),
     ("company_id", "INTEGER"),
     ("stopped_at", "TEXT"),
+    # Which movement API flagged the unit ("gomotive"/"samsara"); the tracker
+    # re-queries motive_vehicle_id against that provider. NULL = gomotive
+    # (every pre-Samsara event came from GoMotive).
+    ("provider", "TEXT"),
+]
+
+# Columns added to a pre-existing `companies` table (same idempotent ADD COLUMN
+# treatment as the events migrations above).
+_COMPANY_MIGRATIONS = [
+    # Second movement provider: companies whose trucks carry Samsara devices.
+    ("samsara_token", "TEXT"),
 ]
 
 # Migrations on a pre-existing `companies` table (CREATE TABLE above only covers
@@ -146,6 +161,7 @@ class Company:
     id: int
     name: str
     gomotive_token: Optional[str] = None
+    samsara_token: Optional[str] = None
     quantum_token: Optional[str] = None
     alert_chat_id: Optional[str] = None
     active: int = 1
@@ -175,6 +191,9 @@ class AnomalyEvent:
     # Set when a moving anomaly's unit stops: the span is paused (not resolved),
     # so a later reconnect still raises the all-clear and duration freezes here.
     stopped_at: Optional[str] = None
+    # Movement API that flagged the unit ("gomotive"/"samsara"); the tracker
+    # re-queries motive_vehicle_id against it. NULL = gomotive (legacy rows).
+    provider: Optional[str] = None
 
     @property
     def disconnect_dt(self) -> Optional[datetime]:
@@ -277,6 +296,10 @@ async def init_db() -> None:
                 await conn.execute(
                     f"ALTER TABLE companies DROP COLUMN IF EXISTS {col}"
                 )
+            for name, ddl in _COMPANY_MIGRATIONS:
+                await conn.execute(
+                    f"ALTER TABLE companies ADD COLUMN IF NOT EXISTS {name} {ddl}"
+                )
             await conn.execute(_COMPANY_INDEX)
             try:
                 await conn.execute(_COMPANY_CHAT_UNIQUE_INDEX)
@@ -315,6 +338,10 @@ async def init_db() -> None:
             for col in _COMPANY_DROPS:
                 if col in company_cols:
                     await db.execute(f"ALTER TABLE companies DROP COLUMN {col}")
+                    company_cols.discard(col)
+            for name, ddl in _COMPANY_MIGRATIONS:
+                if name not in company_cols:
+                    await db.execute(f"ALTER TABLE companies ADD COLUMN {name} {ddl}")
             await db.execute(_COMPANY_INDEX)
             try:
                 await db.execute(_COMPANY_CHAT_UNIQUE_INDEX)
@@ -345,7 +372,9 @@ async def _seed_default_company() -> None:
     if existing is not None:
         return
 
-    has_legacy_tokens = bool(config.GOMOTIVE_TOKEN and config.QUANTUM_TOKEN)
+    has_legacy_tokens = bool(
+        (config.GOMOTIVE_TOKEN or config.SAMSARA_TOKEN) and config.QUANTUM_TOKEN
+    )
     orphan = await _fetchrow("SELECT id FROM events WHERE company_id IS NULL LIMIT 1")
     has_orphan_events = orphan is not None
     if not has_legacy_tokens and not has_orphan_events:
@@ -355,6 +384,7 @@ async def _seed_default_company() -> None:
         name="default",
         gomotive_token=config.GOMOTIVE_TOKEN or None,
         quantum_token=config.QUANTUM_TOKEN or None,
+        samsara_token=config.SAMSARA_TOKEN or None,
     )
     if config.ALERT_CHAT_ID:
         await bind_company_chat(company.id, config.ALERT_CHAT_ID)
@@ -441,14 +471,15 @@ async def add_company(
     name: str,
     gomotive_token: Optional[str],
     quantum_token: Optional[str],
+    samsara_token: Optional[str] = None,
 ) -> Company:
     """Create a company and return it. ``alert_chat_id`` is left NULL — bind it to
     a Telegram group with :func:`bind_company_chat` before it will be polled."""
     now = datetime.utcnow().isoformat(timespec="seconds")
     company_id = await _insert_returning_id(
-        "INSERT INTO companies (name, gomotive_token, quantum_token, "
-        "created_at) VALUES ($1, $2, $3, $4)",
-        name, gomotive_token, quantum_token, now,
+        "INSERT INTO companies (name, gomotive_token, samsara_token, "
+        "quantum_token, created_at) VALUES ($1, $2, $3, $4, $5)",
+        name, gomotive_token, samsara_token, quantum_token, now,
     )
     row = await _fetchrow("SELECT * FROM companies WHERE id = $1", company_id)
     return _row_to_company(row)
@@ -531,6 +562,7 @@ async def open_event(
     motive_vehicle_id: Optional[str] = None,
     lat: Optional[float] = None,
     lon: Optional[float] = None,
+    provider: Optional[str] = None,
 ) -> AnomalyEvent:
     """Create a new active anomaly event and return it (caller then alerts).
     ``last_alert_at`` is seeded with ``now`` since the caller sends the initial
@@ -539,10 +571,10 @@ async def open_event(
     event_id = await _insert_returning_id(
         "INSERT INTO events (company_id, unit_number, vin, driver, "
         "eld_disconnect_time, first_detected, last_seen, last_speed, last_location, "
-        "motive_vehicle_id, last_lat, last_lon, last_alert_at) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        "motive_vehicle_id, last_lat, last_lon, last_alert_at, provider) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         company_id, unit_number, vin, driver, eld_disconnect_time, now, now, speed,
-        location, motive_vehicle_id, lat, lon, now,
+        location, motive_vehicle_id, lat, lon, now, provider,
     )
     row = await _fetchrow("SELECT * FROM events WHERE id = $1", event_id)
     return _row_to_event(row)

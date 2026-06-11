@@ -52,6 +52,12 @@ def _company_line(company_name: Optional[str]) -> str:
     return f"<b>Company:</b> {escape(company_name)}\n" if company_name else ""
 
 
+def _provider_label(event: AnomalyEvent) -> str:
+    """Display name of the movement provider that flagged the event. Legacy
+    rows (provider NULL) predate Samsara support, so they were GoMotive."""
+    return "Samsara" if event.provider == "samsara" else "GoMotive"
+
+
 def format_alert(event: AnomalyEvent, company_name: Optional[str] = None) -> str:
     """The 🚨 alert sent when a new anomaly is detected."""
     return (
@@ -62,7 +68,7 @@ def format_alert(event: AnomalyEvent, company_name: Optional[str] = None) -> str
         f"<b>Current speed:</b> {_fmt_speed(event.last_speed)}\n"
         f"<b>ELD disconnected at:</b> {_fmt_time(event.eld_disconnect_time)}\n"
         f"<b>Anomaly duration:</b> {human_duration(event.duration_seconds())}\n\n"
-        "<i>Disconnected on Quantum ELD but still moving on GoMotive.</i>"
+        f"<i>Disconnected on Quantum ELD but still moving on {_provider_label(event)}.</i>"
     )
 
 
@@ -76,7 +82,8 @@ def format_stopped(
         f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
         f"<b>Stopped at:</b> <code>{escape(coords)}</code>\n"
         f"<b>Disconnected for:</b> {human_duration(event.duration_seconds())}\n\n"
-        "<i>No movement on GoMotive since the last check, ELD still disconnected.</i>"
+        f"<i>No movement on {_provider_label(event)} since the last check, "
+        "ELD still disconnected.</i>"
     )
 
 

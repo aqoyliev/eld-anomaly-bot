@@ -35,6 +35,12 @@ QUANTUM_TOKEN = env.str("QUANTUM_TOKEN", "")  # seed-only (see note above)
 GOMOTIVE_BASE_URL = env.str("GOMOTIVE_BASE_URL", "https://api.gomotive.com")
 GOMOTIVE_TOKEN = env.str("GOMOTIVE_TOKEN", "")  # seed-only (see note above)
 
+# Samsara fleet API — alternative movement source for companies whose trucks
+# carry Samsara devices instead of GoMotive. A company may have either token
+# (or both); whichever is set is polled for movement.
+SAMSARA_BASE_URL = env.str("SAMSARA_BASE_URL", "https://api.samsara.com")
+SAMSARA_TOKEN = env.str("SAMSARA_TOKEN", "")  # seed-only (see note above)
+
 # Chat/channel that receives the anomaly alerts (e.g. -1001234567890).
 # Falls back to the first admin if not set. Seed-only (see note above).
 ALERT_CHAT_ID = env.str("ALERT_CHAT_ID", ADMINS[0] if ADMINS else "")

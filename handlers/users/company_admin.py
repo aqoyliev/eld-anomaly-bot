@@ -84,7 +84,8 @@ async def add_name(message: types.Message, state: FSMContext):
     await state.update_data(name=name)
     await state.set_state(AddCompany.gomotive_token)
     await message.answer(
-        f"Name: <b>{escape(name)}</b> ✅\n\nNow send the <b>GoMotive API token</b>.\n"
+        f"Name: <b>{escape(name)}</b> ✅\n\nNow send the <b>GoMotive API token</b>, "
+        "or <code>skip</code> if this company's trucks use Samsara instead.\n"
         "<i>I'll delete your message right after reading it.</i>"
     )
 
@@ -103,18 +104,73 @@ async def _consume_secret(message: types.Message) -> str:
     return token
 
 
+def _is_skip(message: types.Message) -> bool:
+    return (message.text or "").strip().lower() in {"skip", "-"}
+
+
+_SAMSARA_PROMPT = (
+    "Now send the <b>Samsara API token</b>{or_skip}.\n"
+    "<i>I'll delete that message too.</i>"
+)
+
+
 @dp.message_handler(state=AddCompany.gomotive_token)
 async def add_gomotive(message: types.Message, state: FSMContext):
     if await _intercept_command(message):
         return
+    if _is_skip(message):
+        await state.update_data(gomotive_token=None)
+        await state.set_state(AddCompany.samsara_token)
+        await message.answer(
+            "GoMotive skipped.\n\n"
+            + _SAMSARA_PROMPT.format(or_skip=" (required — GoMotive was skipped)")
+        )
+        return
     token = await _consume_secret(message)
     if not token:
-        await message.answer("Empty token — send the GoMotive token, or /cancel.")
+        await message.answer("Empty token — send the GoMotive token, "
+                             "<code>skip</code>, or /cancel.")
         return
     await state.update_data(gomotive_token=token)
+    await state.set_state(AddCompany.samsara_token)
+    await message.answer(
+        "GoMotive token received ✅\n\n"
+        + _SAMSARA_PROMPT.format(
+            or_skip=", or <code>skip</code> if this company has no Samsara devices"
+        )
+    )
+
+
+@dp.message_handler(state=AddCompany.samsara_token)
+async def add_samsara(message: types.Message, state: FSMContext):
+    if await _intercept_command(message):
+        return
+    if _is_skip(message):
+        data = await state.get_data()
+        if not data.get("gomotive_token"):
+            # No movement provider at all — the company could never be polled.
+            await message.answer(
+                "GoMotive was skipped, so a <b>Samsara token is required</b> "
+                "(a company needs at least one movement provider). Send the "
+                "Samsara token, or /cancel."
+            )
+            return
+        await state.update_data(samsara_token=None)
+        await state.set_state(AddCompany.quantum_token)
+        await message.answer(
+            "Samsara skipped.\n\nNow send the <b>Quantum ELD API token</b>.\n"
+            "<i>I'll delete that message too.</i>"
+        )
+        return
+    token = await _consume_secret(message)
+    if not token:
+        await message.answer("Empty token — send the Samsara token, "
+                             "<code>skip</code>, or /cancel.")
+        return
+    await state.update_data(samsara_token=token)
     await state.set_state(AddCompany.quantum_token)
     await message.answer(
-        "GoMotive token received ✅\n\nNow send the <b>Quantum ELD API token</b>.\n"
+        "Samsara token received ✅\n\nNow send the <b>Quantum ELD API token</b>.\n"
         "<i>I'll delete that message too.</i>"
     )
 
@@ -133,11 +189,13 @@ async def add_quantum(message: types.Message, state: FSMContext):
     company = await store.add_company(
         name=data["name"],
         gomotive_token=data["gomotive_token"],
+        samsara_token=data.get("samsara_token"),
         quantum_token=token,
     )
     await message.answer(
         f"✅ Created company <b>{escape(company.name)}</b> (id {company.id}).\n"
         f"  GoMotive: <code>{_mask(company.gomotive_token)}</code>\n"
+        f"  Samsara: <code>{_mask(company.samsara_token)}</code>\n"
         f"  Quantum: <code>{_mask(company.quantum_token)}</code>\n\n"
         "It won't be polled until an alert chat is linked. Go to its alert group "
         f"and send:\n<code>/bindhere {escape(company.name)}</code>"
@@ -199,6 +257,7 @@ async def list_companies(message: types.Message):
         lines.append(
             f"<b>[{c.id}] {escape(c.name)}</b> — {'active' if c.active else 'inactive'}, {polled}\n"
             f"   GoMotive <code>{_mask(c.gomotive_token)}</code> · "
+            f"Samsara <code>{_mask(c.samsara_token)}</code> · "
             f"Quantum <code>{_mask(c.quantum_token)}</code> · chat {chat}"
         )
     await message.answer("\n".join(lines))

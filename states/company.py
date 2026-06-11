@@ -3,7 +3,10 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 
 class AddCompany(StatesGroup):
     """Step-by-step wizard for /addcompany. Token steps auto-delete the message
-    that carried the secret (where Telegram allows it)."""
+    that carried the secret (where Telegram allows it). The two movement-provider
+    steps (GoMotive, Samsara) are individually skippable — a company needs at
+    least one of them; Quantum is always required."""
     name = State()
     gomotive_token = State()
+    samsara_token = State()
     quantum_token = State()

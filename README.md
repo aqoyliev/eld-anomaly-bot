@@ -3,11 +3,13 @@
 A Telegram bot that detects **ELD-disconnection anomalies / fraud** in a
 logistics fleet by cross-referencing two telematics sources:
 
-- **GoMotive (Motive)** — ground-truth vehicle movement (speed + location)
+- **GoMotive (Motive)** or **Samsara** — ground-truth vehicle movement
+  (speed + location); each company uses whichever device its trucks carry
+  (or both, for a mixed fleet)
 - **Quantum ELD** — the electronic logging device that *should* be
   recording the trip
 
-If a truck is **moving on GoMotive** while its **Quantum ELD has stopped
+If a truck is **moving on GoMotive/Samsara** while its **Quantum ELD has stopped
 reporting** (its last report is stale), the ELD looks disconnected/offline while
 the vehicle keeps driving — the classic disconnection-fraud pattern. The bot
 fires a 🚨 alert to a Telegram channel.
@@ -16,10 +18,12 @@ fires a 🚨 alert to a Telegram channel.
 
 Every 5 minutes the poller runs this pipeline:
 
-1. **Ask GoMotive which vehicles are moving** — page through
-   `/v3/vehicle_locations` (preferred, Vehicle Gateway feed) with a `/v1`
-   fallback for vehicles v3 doesn't return. Speeds are normalised to mph; only
-   vehicles with `speed > 0` are kept.
+1. **Ask the company's movement provider(s) which vehicles are moving** —
+   GoMotive: page through `/v3/vehicle_locations` (preferred, Vehicle Gateway
+   feed) with a `/v1` fallback for vehicles v3 doesn't return, speeds
+   normalised to mph. Samsara: page through `/fleet/vehicles/stats?types=gps`
+   (mph natively). Only vehicles with `speed > 0` are kept; each is tagged
+   with the provider that reported it.
 2. **Look each moving truck up in Quantum** by unit number
    (`GET /vehicles/{unit_number}`), reading its last report time.
 3. **Flag an anomaly** when the Quantum report is older than
@@ -29,7 +33,7 @@ Every 5 minutes the poller runs this pipeline:
    truck starts reporting again the event auto-resolves.
 
 ```
-GoMotive (moving vehicles) ──► Quantum lookup per unit ──► stale? ──► 🚨 alert
+GoMotive/Samsara (moving vehicles) ──► Quantum lookup per unit ──► stale? ──► 🚨 alert
                                                                   └────► SQLite event + /status + /history
 ```
 
@@ -74,7 +78,8 @@ Disconnected on Quantum ELD but still moving on GoMotive.
 ## Multi-company
 
 The bot serves **multiple trucking companies** at once. Each company has its own
-GoMotive token, Quantum token, and Telegram alert group, and is stored in a
+movement-provider token(s) (GoMotive and/or Samsara — at least one), Quantum
+token, and Telegram alert group, and is stored in a
 `companies` table; every event is scoped by `company_id`, so two companies can
 share a unit number without colliding. Each poll/track tick iterates the active
 companies (those that are active **and** bound to an alert chat).
@@ -82,7 +87,8 @@ companies (those that are active **and** bound to an alert chat).
 **Adding a company** (all in Telegram, as an admin):
 
 1. DM the bot `/addcompany` and follow the prompts (name → GoMotive token →
-   Quantum token). The bot deletes the messages
+   Samsara token → Quantum token; either movement-provider step can be
+   skipped with `skip`, but not both). The bot deletes the messages
    containing tokens.
 2. Add the bot to that company's Telegram alert group and send
    `/bindhere <name>` there. It starts being polled on the next cycle.
@@ -132,6 +138,8 @@ All settings live in `.env` (gitignored, never committed):
 | `QUANTUM_TOKEN`          | —                                                | **Seed-only:** Quantum token for the auto-seeded `default` company (see [Multi-company](#multi-company)) |
 | `GOMOTIVE_BASE_URL`      | `https://api.gomotive.com`                       | GoMotive API base URL (constant for all companies) |
 | `GOMOTIVE_TOKEN`         | —                                                | **Seed-only:** Motive API key for the `default` company |
+| `SAMSARA_BASE_URL`       | `https://api.samsara.com`                        | Samsara API base URL (constant for all companies) |
+| `SAMSARA_TOKEN`          | —                                                | **Seed-only:** Samsara API token for the `default` company |
 | `ALERT_CHAT_ID`          | first admin                                      | **Seed-only:** alert chat for the `default` company. New companies are bound with `/bindhere`. |
 | `POLL_INTERVAL`          | `300`                                            | Seconds between poll cycles |
 | `ELD_STALE_THRESHOLD`    | `600`                                            | Seconds before a Quantum report counts as disconnected |
@@ -156,6 +164,7 @@ Deploying to Railway? See **[SETUP.md → Deploy to Railway](SETUP.md#deploy-to-
 ├── states/company.py          # FSM states for the /addcompany wizard
 ├── utils/eld/
 │   ├── gomotive.py            # Motive client (v1+v3, pagination, kph→mph)
+│   ├── samsara.py             # Samsara client (same interface as gomotive)
 │   ├── quantumeld.py          # Quantum ELD per-vehicle lookups
 │   ├── detector.py            # Anomaly cross-reference
 │   ├── store.py               # companies + events; per-company scoping, seed/backfill
@@ -174,6 +183,9 @@ Deploying to Railway? See **[SETUP.md → Deploy to Railway](SETUP.md#deploy-to-
 # Check the Quantum token / endpoint
 python scripts/quantum_probe.py
 
+# Check a Samsara token (per-vehicle GPS summary; --raw for the raw JSON)
+python scripts/samsara_probe.py --token <api-token>
+
 # Send a test alert using a real moving truck (mocks only the Quantum side)
 python scripts/mock_alert.py            # picks a moving truck, runs 2 cycles
 python scripts/mock_alert.py --cleanup  # remove test events afterwards
@@ -181,8 +193,8 @@ python scripts/mock_alert.py --cleanup  # remove test events afterwards
 
 ## Notes & assumptions
 
-- **Matching is by unit number** (GoMotive `vehicle.number` ↔ Quantum
-  `unit_number`), with owner/tag suffixes stripped (e.g. `"0942  O/O"` →
+- **Matching is by unit number** (GoMotive `vehicle.number` / Samsara `name`
+  ↔ Quantum `unit_number`), with owner/tag suffixes stripped (e.g. `"0942  O/O"` →
   `"0942"`). VIN is intentionally **not** the join key because the two systems
   occasionally disagree on a VIN (data-entry transpositions).
 - **Times are UTC.** Quantum report times are UTC (naive); staleness and

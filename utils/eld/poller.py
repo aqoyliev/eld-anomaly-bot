@@ -6,7 +6,7 @@ import logging
 from aiogram import Bot
 
 from data import config
-from . import gomotive, quantumeld, store
+from . import gomotive, quantumeld, samsara, store
 from .detector import find_anomalies
 from .formatting import format_alert
 
@@ -34,17 +34,35 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
                        company.name)
         return
 
+    if not company.gomotive_token and not company.samsara_token:
+        logger.warning("Company %s has no movement-provider token (GoMotive or "
+                       "Samsara); skipping poll cycle.", company.name)
+        return
+
     quantum_base_url = config.QUANTUM_BASE_URL
 
-    # 1. Ask GoMotive which vehicles are moving right now. (GoMotive's base URL is
-    #    a constant, so it stays in config; only the token is per-company.)
-    moving = await gomotive.fetch_moving_vehicles(
-        company.gomotive_token,
-        config.GOMOTIVE_BASE_URL,
-        threshold_mph=config.MOVING_SPEED_THRESHOLD,
-    )
+    # 1. Ask the company's movement provider(s) which vehicles are moving right
+    #    now. A company may run GoMotive, Samsara, or both (mixed fleet) — each
+    #    vehicle object carries .provider so the tracker re-queries the right
+    #    API later. (Base URLs are constants in config; only tokens are
+    #    per-company.) If both feeds return the same unit, GoMotive wins.
+    moving: dict = {}
+    if company.gomotive_token:
+        moving.update(await gomotive.fetch_moving_vehicles(
+            company.gomotive_token,
+            config.GOMOTIVE_BASE_URL,
+            threshold_mph=config.MOVING_SPEED_THRESHOLD,
+        ))
+    if company.samsara_token:
+        for unit, v in (await samsara.fetch_moving_vehicles(
+            company.samsara_token,
+            config.SAMSARA_BASE_URL,
+            threshold_mph=config.MOVING_SPEED_THRESHOLD,
+        )).items():
+            moving.setdefault(unit, v)
     if not moving:
-        logger.info("Poll[%s]: no moving vehicles on GoMotive.", company.name)
+        logger.info("Poll[%s]: no moving vehicles on the movement provider(s).",
+                    company.name)
         return
 
     # 2. Look those vehicles up in Quantum by unit number to read their last
@@ -71,8 +89,8 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
                     company.name, len(not_in_quantum), not_in_quantum)
 
     for anomaly in anomalies:
-        q, gm = anomaly.quantum, anomaly.gomotive
-        # GoMotive's current coordinates = where the truck actually is right now.
+        q, gm = anomaly.quantum, anomaly.movement
+        # The provider's current coordinates = where the truck actually is right now.
         location = gm.coordinates_label
         existing = await store.get_active_event(company.id, anomaly.unit_number)
         if existing and existing.stopped_at is None:
@@ -101,6 +119,7 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             motive_vehicle_id=str(gm.vehicle_id) if gm.vehicle_id is not None else None,
             lat=gm.latitude,
             lon=gm.longitude,
+            provider=gm.provider,
         )
         await _send_alert(bot, company, event)
 

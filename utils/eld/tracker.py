@@ -4,7 +4,8 @@ Runs on a faster cadence than the 5-min sweep (default every 2 min). An anomaly
 counts only moving-while-disconnected time, so for each active anomaly it:
   1. checks Quantum — if the ELD reports fresh again, the device reconnected,
      so the anomaly is resolved (all-clear);
-  2. re-queries GoMotive by vehicle id (cheap, just the flagged units) and, by
+  2. re-queries the unit's movement provider (GoMotive or Samsara, whichever
+     flagged it) by vehicle id (cheap, just the flagged units) and, by
      comparing the position to the previous check, decides whether the truck has
      stopped/pulled over — if so it announces the stop once and PAUSES the event
      (marks ``stopped_at``), because a stop ends the moving anomaly. The event is
@@ -26,7 +27,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from data import config
-from . import gomotive, quantumeld, store
+from . import gomotive, quantumeld, samsara, store
 from .formatting import format_reconnected, format_reminder, format_stopped
 
 logger = logging.getLogger(__name__)
@@ -71,13 +72,24 @@ async def track_once(bot: Bot, company: store.Company) -> None:
 
     quantum_base_url = config.QUANTUM_BASE_URL
 
-    # Targeted GoMotive movement for just the flagged units + Quantum freshness.
-    ids = [e.motive_vehicle_id for e in events if e.motive_vehicle_id]
+    # Targeted movement re-query for just the flagged units + Quantum freshness.
+    # Each event carries the provider that flagged it (NULL = gomotive on
+    # legacy rows), so the ids are split and re-queried per provider.
+    gm_ids = [e.motive_vehicle_id for e in events
+              if e.motive_vehicle_id and (e.provider or "gomotive") == "gomotive"]
+    ss_ids = [e.motive_vehicle_id for e in events
+              if e.motive_vehicle_id and e.provider == "samsara"]
     gm_map = (
         await gomotive.fetch_by_ids(
-            ids, company.gomotive_token, config.GOMOTIVE_BASE_URL
+            gm_ids, company.gomotive_token, config.GOMOTIVE_BASE_URL
         )
-        if ids else {}
+        if gm_ids else {}
+    )
+    ss_map = (
+        await samsara.fetch_by_ids(
+            ss_ids, company.samsara_token, config.SAMSARA_BASE_URL
+        )
+        if ss_ids else {}
     )
     quantum_map = await quantumeld.fetch_vehicles(
         [e.unit_number for e in events], company.quantum_token, quantum_base_url
@@ -104,7 +116,8 @@ async def track_once(bot: Bot, company: store.Company) -> None:
         if e.stopped_at:
             continue
 
-        gm = gm_map.get(e.motive_vehicle_id) if e.motive_vehicle_id else None
+        vmap = ss_map if e.provider == "samsara" else gm_map
+        gm = vmap.get(e.motive_vehicle_id) if e.motive_vehicle_id else None
 
         # 2) Stopped? An anomaly counts moving-while-disconnected time only, so a
         #    stop ENDS it: announce the stop once and PAUSE the event (freeze its
