@@ -59,10 +59,9 @@ def _provider_label(event: AnomalyEvent) -> str:
 
 
 def _provider_badge(event: AnomalyEvent) -> str:
-    """Compact provider tag for one-line listings (/status, /history). Uses the
-    shorter brand name 'Motive' and an emoji so the source device is visible at
-    a glance."""
-    return "📡 Samsara" if event.provider == "samsara" else "📡 Motive"
+    """Compact provider tag for one-line listings (/status, /history): the
+    provider name with an emoji so the source device is visible at a glance."""
+    return f"📡 {_provider_label(event)}"
 
 
 def format_alert(event: AnomalyEvent, company_name: Optional[str] = None) -> str:
