@@ -58,6 +58,13 @@ def _provider_label(event: AnomalyEvent) -> str:
     return "Samsara" if event.provider == "samsara" else "GoMotive"
 
 
+def _provider_badge(event: AnomalyEvent) -> str:
+    """Compact provider tag for one-line listings (/status, /history). Uses the
+    shorter brand name 'Motive' and an emoji so the source device is visible at
+    a glance."""
+    return "📡 Samsara" if event.provider == "samsara" else "📡 Motive"
+
+
 def format_alert(event: AnomalyEvent, company_name: Optional[str] = None) -> str:
     """The 🚨 alert sent when a new anomaly is detected."""
     return (
@@ -113,10 +120,12 @@ def format_reconnected(
 
 def format_status_line(event: AnomalyEvent) -> str:
     return (
-        f"🔴 <b>{escape(event.unit_number)}</b> — "
-        f"{_fmt_speed(event.last_speed)} @ {escape(event.last_location or 'unknown')}\n"
-        f"    disconnected {_fmt_time(event.eld_disconnect_time)} "
-        f"(ongoing {human_duration(event.duration_seconds())})"
+        f"🔴 <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)} "
+        f"· {_provider_badge(event)}\n"
+        f"    🚗 {_fmt_speed(event.last_speed)} · "
+        f"📍 {escape(event.last_location or 'unknown')}\n"
+        f"    🕑 disconnected {_fmt_time(event.eld_disconnect_time)} "
+        f"· ongoing {human_duration(event.duration_seconds())}"
     )
 
 
@@ -128,6 +137,7 @@ def format_history_line(event: AnomalyEvent) -> str:
         marker = "🔴"
         tail = f"ongoing {human_duration(event.duration_seconds())}"
     return (
-        f"{marker} <b>{escape(event.unit_number)}</b> — "
-        f"disconnected {_fmt_time(event.eld_disconnect_time)} ({tail})"
+        f"{marker} <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)} "
+        f"· {_provider_badge(event)}\n"
+        f"    🕑 disconnected {_fmt_time(event.eld_disconnect_time)} · {tail}"
     )
