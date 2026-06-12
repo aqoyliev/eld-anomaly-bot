@@ -121,7 +121,7 @@ def format_status_line(event: AnomalyEvent) -> str:
     return (
         f"🔴 <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)} "
         f"· {_provider_badge(event)}\n"
-        f"    ⚡ {_fmt_speed(event.last_speed)} · "
+        f"    🏎️ {_fmt_speed(event.last_speed)} · "
         f"📍 {escape(event.last_location or 'unknown')}\n"
         f"    🕑 disconnected {_fmt_time(event.eld_disconnect_time)} "
         f"· ongoing {human_duration(event.duration_seconds())}"
