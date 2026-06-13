@@ -42,6 +42,15 @@ def _haversine_mi(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(math.sqrt(a))
 
 
+def _reading_is_fresh(vehicle, provider: str) -> bool:
+    """Whether a re-queried vehicle's reading is recent enough to still count as
+    live movement. Dispatches to the provider's own freshness check/threshold so
+    a powered-off gateway frozen at speed isn't treated as a moving truck."""
+    if provider == "samsara":
+        return samsara._is_fresh(vehicle, config.SAMSARA_GPS_FRESHNESS)
+    return gomotive._is_fresh(vehicle, config.GOMOTIVE_GPS_FRESHNESS)
+
+
 def ignore_keyboard(event_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup().add(
         InlineKeyboardButton(
@@ -118,6 +127,26 @@ async def track_once(bot: Bot, company: store.Company) -> None:
 
         vmap = ss_map if e.provider == "samsara" else gm_map
         gm = vmap.get(e.motive_vehicle_id) if e.motive_vehicle_id else None
+
+        # 1b) Device went dark? The movement APIs return the last-known reading
+        #     even after the gateway is powered off, frozen at its final speed
+        #     and position. If that final speed was highway speed the stop check
+        #     below never trips (speed stays high while position is frozen), so
+        #     the event would re-alert forever. Treat a stale reading as a stop:
+        #     the truck is no longer CONFIRMABLY moving, which ends the anomaly.
+        if gm is not None and not _reading_is_fresh(gm, e.provider):
+            await store.touch_event(
+                e.id, speed=gm.speed, location=gm.coordinates_label,
+                lat=gm.latitude, lon=gm.longitude,
+            )
+            await _notify(
+                bot, company,
+                format_stopped(e, gm.coordinates_label, company_name=company.name),
+            )
+            await store.mark_stopped(e.id)
+            logger.info("Tracker[%s]: %s reading went stale (device dark) — "
+                        "anomaly paused.", company.name, e.unit_number)
+            continue
 
         # 2) Stopped? An anomaly counts moving-while-disconnected time only, so a
         #    stop ENDS it: announce the stop once and PAUSE the event (freeze its

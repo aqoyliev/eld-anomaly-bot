@@ -18,7 +18,7 @@ Docs: https://developer-docs.gomotive.com/reference/
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import aiohttp
@@ -171,14 +171,40 @@ async def _fetch_version(
     return out
 
 
+def _is_fresh(v: GoMotiveVehicle, max_age_seconds: Optional[int]) -> bool:
+    """Whether the vehicle's location reading is recent enough to count as a
+    CURRENT observation. GoMotive returns the last-known reading even after the
+    gateway is powered off (frozen at its final speed), so a stale reading must
+    not be treated as the truck moving right now. A missing reading time can't
+    be confirmed current, so it is stale too."""
+    if max_age_seconds is None:
+        return True
+    if v.time is None:
+        return False
+    # located_at is normally tz-aware (Z/offset); treat a naive time as UTC so
+    # the subtraction never raises and stays consistent with the UTC clock.
+    reading = v.time if v.time.tzinfo else v.time.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - reading).total_seconds() <= max_age_seconds
+
+
 async def fetch_moving_vehicles(
-    token: str, base_url: str, threshold_mph: float = 0.0
+    token: str,
+    base_url: str,
+    threshold_mph: float = 0.0,
+    freshness_seconds: Optional[int] = None,
 ) -> Dict[str, GoMotiveVehicle]:
     """Return {unit_number: vehicle} for vehicles moving above the threshold.
 
     Coverage = v3 with v1 fallback: take v1 as the base, then let v3 override
     (v3 is the preferred Gateway feed), so vehicles only present in one feed are
     still included.
+
+    ``freshness_seconds`` drops vehicles whose reading (current_location.
+    located_at) is older than that — REQUIRED for anomaly detection (the poller
+    passes ``config.GOMOTIVE_GPS_FRESHNESS``): GoMotive keeps a powered-off
+    gateway frozen at its last speed, so without this a truck whose device died
+    days ago is a permanent false anomaly. ``None`` (no filter) is for
+    diagnostics like the probe scripts.
     """
     v1 = await _fetch_version("v1", token, base_url)
     v3 = await _fetch_version("v3", token, base_url)
@@ -186,15 +212,22 @@ async def fetch_moving_vehicles(
     merged: Dict[str, GoMotiveVehicle] = dict(v1)
     merged.update(v3)  # v3 wins where both have the vehicle
 
-    logger.info(
-        "GoMotive: v1=%d, v3=%d, merged=%d vehicles", len(v1), len(v3), len(merged)
-    )
-
-    return {
+    moving = {
         unit: v
         for unit, v in merged.items()
         if v.speed is not None and v.speed > threshold_mph
     }
+    fresh = {
+        unit: v for unit, v in moving.items() if _is_fresh(v, freshness_seconds)
+    }
+
+    logger.info(
+        "GoMotive: v1=%d, v3=%d, merged=%d vehicles, %d at speed, %d with a "
+        "fresh reading (counted as moving)",
+        len(v1), len(v3), len(merged), len(moving), len(fresh),
+    )
+
+    return fresh
 
 
 async def fetch_by_ids(

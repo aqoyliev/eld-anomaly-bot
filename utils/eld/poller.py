@@ -52,6 +52,10 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             company.gomotive_token,
             config.GOMOTIVE_BASE_URL,
             threshold_mph=config.MOVING_SPEED_THRESHOLD,
+            # Required: GoMotive keeps a powered-off gateway frozen at its last
+            # speed, so without this a truck whose device died days ago is a
+            # permanent false anomaly (e.g. unit 1264, powered off 6 days).
+            freshness_seconds=config.GOMOTIVE_GPS_FRESHNESS,
         ))
     if company.samsara_token:
         for unit, v in (await samsara.fetch_moving_vehicles(

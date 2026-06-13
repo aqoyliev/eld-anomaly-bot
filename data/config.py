@@ -63,6 +63,15 @@ MOVING_SPEED_THRESHOLD = env.float("MOVING_SPEED_THRESHOLD", 10.0)
 # movement (default 15 min; a live Samsara gateway reports sub-minute).
 SAMSARA_GPS_FRESHNESS = env.int("SAMSARA_GPS_FRESHNESS", 900)
 
+# GoMotive's vehicle_locations endpoint has the SAME pitfall: it returns each
+# vehicle's last-known reading (current_location.located_at) even after the
+# gateway is powered off, so a truck whose device died days ago keeps reporting
+# its final speed and looks like it's still moving. A reading older than this
+# many seconds is not treated as current movement (default 15 min; a live
+# Motive gateway reports every few minutes). Real case: unit 1264's gateway was
+# powered off 6 days yet GoMotive still showed it at speed -> false anomaly.
+GOMOTIVE_GPS_FRESHNESS = env.int("GOMOTIVE_GPS_FRESHNESS", 900)
+
 # --- Tracking of already-flagged (disconnected) units ------------------------
 # How often the tracker re-checks disconnected units, in seconds (default 2 min).
 # It re-queries GoMotive by vehicle id (cheap) plus Quantum for reconnection.
