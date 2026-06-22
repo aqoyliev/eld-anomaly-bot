@@ -58,15 +58,20 @@ def quantum_key(unit_number: str) -> str:
     """Derive the bare unit number Quantum stores from a GoMotive unit number.
 
     "0942  O/O" -> "0942", "2512 O/O" -> "2512", "002  ZM" -> "002",
-    "1277  CROSS USA" -> "1277", "1137" -> "1137".
+    "1277  CROSS USA" -> "1277", "1137" -> "1137",
+    "unit 775263 CARLOS PEREZ" -> "775263",
+    "unit 228005 IVAN AGUILAR/JORGE ESPEJO" -> "228005".
     A wide (2+ space) gap usually separates the number from a tag; otherwise, a
-    leading numeric token followed by a tag is reduced to just the number.
+    leading numeric token followed by a tag/driver name is reduced to just the
+    number. Some providers also prefix the literal word "unit", which is dropped.
     """
     u = unit_number.strip()
+    # Drop a literal "unit" prefix some providers prepend (e.g. "unit 1013 ...").
+    u = re.sub(r"^unit\s+", "", u, flags=re.IGNORECASE)
     head = re.split(r"\s{2,}", u)[0].strip()  # drop tag after a wide gap
     tokens = head.split()
     if len(tokens) > 1 and tokens[0].isdigit():
-        return tokens[0]  # e.g. "2512 O/O" (single space) -> "2512"
+        return tokens[0]  # e.g. "2512 O/O" -> "2512", "228005 IVAN/JORGE" -> "228005"
     return head
 
 
@@ -107,7 +112,9 @@ async def fetch_vehicle(
     record for it (HTTP 200 with content=null). Raises on auth/HTTP errors so a
     token problem surfaces instead of silently yielding zero anomalies."""
     key = quantum_key(unit_number)
-    url = f"{base_url.rstrip('/')}/vehicles/{quote(key)}"
+    # safe="" so a "/" in the key escapes to %2F instead of splitting the path
+    # (e.g. dual-driver names like "IVAN AGUILAR/JORGE ESPEJO" -> a bogus 401).
+    url = f"{base_url.rstrip('/')}/vehicles/{quote(key, safe='')}"
     headers = {
         "accept": "*/*",
         "Authorization": f"Bearer {token}",
