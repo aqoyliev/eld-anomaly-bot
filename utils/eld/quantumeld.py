@@ -60,19 +60,22 @@ def quantum_key(unit_number: str) -> str:
     "0942  O/O" -> "0942", "2512 O/O" -> "2512", "002  ZM" -> "002",
     "1277  CROSS USA" -> "1277", "1137" -> "1137",
     "unit 775263 CARLOS PEREZ" -> "775263",
-    "unit 228005 IVAN AGUILAR/JORGE ESPEJO" -> "228005".
+    "unit 228005 IVAN AGUILAR/JORGE ESPEJO" -> "228005",
+    "147109." -> "147109".
     A wide (2+ space) gap usually separates the number from a tag; otherwise, a
     leading numeric token followed by a tag/driver name is reduced to just the
     number. Some providers also prefix the literal word "unit", which is dropped.
+    A trailing dot (e.g. "147109.") is stray punctuation and is stripped too.
     """
     u = unit_number.strip()
     # Drop a literal "unit" prefix some providers prepend (e.g. "unit 1013 ...").
     u = re.sub(r"^unit\s+", "", u, flags=re.IGNORECASE)
     head = re.split(r"\s{2,}", u)[0].strip()  # drop tag after a wide gap
     tokens = head.split()
-    if len(tokens) > 1 and tokens[0].isdigit():
-        return tokens[0]  # e.g. "2512 O/O" -> "2512", "228005 IVAN/JORGE" -> "228005"
-    return head
+    # Strip a trailing dot so "147109." matches Quantum's bare "147109".
+    if len(tokens) > 1 and tokens[0].rstrip(".").isdigit():
+        return tokens[0].rstrip(".")  # e.g. "2512 O/O" -> "2512", "228005 IVAN/JORGE" -> "228005"
+    return head.rstrip(".")
 
 
 def _parse_time(value: Optional[str]) -> Optional[datetime]:
