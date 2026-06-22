@@ -58,14 +58,26 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             freshness_seconds=config.GOMOTIVE_GPS_FRESHNESS,
         ))
     if company.samsara_token:
-        for unit, v in (await samsara.fetch_moving_vehicles(
+        samsara_moving = await samsara.fetch_moving_vehicles(
             company.samsara_token,
             config.SAMSARA_BASE_URL,
             threshold_mph=config.MOVING_SPEED_THRESHOLD,
             # Required: Samsara's snapshot keeps dead gateways frozen at their
             # last speed, so without this every one of them is a false anomaly.
             freshness_seconds=config.SAMSARA_GPS_FRESHNESS,
-        )).items():
+        )
+        # The stats feed carries no VIN, so look the moving units' VINs up
+        # separately and stamp them on — detection compares VIN against Quantum
+        # to tell two trucks that share a unit number apart.
+        vins = await samsara.fetch_vins(
+            [v.vehicle_id for v in samsara_moving.values() if v.vehicle_id],
+            company.samsara_token,
+            config.SAMSARA_BASE_URL,
+        )
+        for v in samsara_moving.values():
+            if v.vehicle_id and v.vehicle_id in vins:
+                v.vin = vins[v.vehicle_id]
+        for unit, v in samsara_moving.items():
             moving.setdefault(unit, v)
     if not moving:
         logger.info("Poll[%s]: no moving vehicles on the movement provider(s).",

@@ -185,6 +185,58 @@ async def fetch_moving_vehicles(
     return fresh
 
 
+async def fetch_vins(
+    vehicle_ids: List[str], token: str, base_url: str
+) -> Dict[str, str]:
+    """Return {str(id): vin} for the given vehicle ids.
+
+    The stats feed (/fleet/vehicles/stats) doesn't carry VINs, so the poller
+    enriches the moving Samsara vehicles via this separate /fleet/vehicles
+    lookup. The VIN is what lets detection tell two trucks that share a unit
+    number apart (compared against the Quantum VIN). Vehicles without a VIN on
+    record are simply omitted (the detector falls back to the unit-number match
+    when a VIN is missing)."""
+    ids = [str(v) for v in vehicle_ids if v]
+    if not ids or not token:
+        return {}
+
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    url = f"{base_url.rstrip('/')}/fleet/vehicles"
+    timeout = aiohttp.ClientTimeout(total=30)
+
+    out: Dict[str, str] = {}
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for start in range(0, len(ids), _MAX_IDS_PER_CALL):
+            chunk = ids[start:start + _MAX_IDS_PER_CALL]
+            after: Optional[str] = None
+            pages = 0
+            while pages < _MAX_PAGES:
+                params: List[tuple] = [("ids", ",".join(chunk))]
+                if after:
+                    params.append(("after", after))
+                async with session.get(url, headers=headers, params=params) as resp:
+                    if resp.status != 200:
+                        body = " ".join((await resp.text()).split())[:160]
+                        raise RuntimeError(
+                            f"Samsara /fleet/vehicles HTTP {resp.status}: {body}"
+                        )
+                    data = await resp.json()
+                for record in data.get("data") or []:
+                    vid = record.get("id")
+                    vin = record.get("vin")
+                    if vid is not None and vin:
+                        out[str(vid)] = str(vin)
+                pages += 1
+                pagination = data.get("pagination") or {}
+                after = pagination.get("endCursor")
+                if not pagination.get("hasNextPage") or not after:
+                    break
+    return out
+
+
 async def fetch_by_ids(
     vehicle_ids: List[str], token: str, base_url: str
 ) -> Dict[str, SamsaraVehicle]:
