@@ -7,7 +7,7 @@ from aiogram import Bot
 
 from data import config
 from . import gomotive, quantumeld, samsara, store
-from .detector import find_anomalies
+from .detector import find_anomalies, vins_conflict
 from .formatting import format_alert
 
 logger = logging.getLogger(__name__)
@@ -45,10 +45,29 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
     #    now. A company may run GoMotive, Samsara, or both (mixed fleet) — each
     #    vehicle object carries .provider so the tracker re-queries the right
     #    API later. (Base URLs are constants in config; only tokens are
-    #    per-company.) If both feeds return the same unit, GoMotive wins.
-    moving: dict = {}
+    #    per-company.)
+    #
+    #    ``moving`` is a LIST, not a unit-keyed dict, because two providers can
+    #    report DIFFERENT trucks under the same unit number (a real case in the
+    #    707 mixed fleet). _add keeps GoMotive's truck when both feeds report the
+    #    SAME truck under a unit number (dual-device, matching/again-missing VIN),
+    #    but keeps BOTH when their VINs clearly differ so detection can compare
+    #    each against Quantum and flag only the right one.
+    moving: list = []
+    seen: dict = {}  # unit_number -> list of vehicles already kept for it
+
+    def _add(v) -> None:
+        kept = seen.setdefault(v.unit_number, [])
+        # Drop a same-unit vehicle only when it's NOT a clear VIN conflict with
+        # one we already kept (i.e. same truck, or VIN unknown on either side) —
+        # preserving "GoMotive wins duplicates" for dual-device trucks.
+        if any(not vins_conflict(e.vin, v.vin) for e in kept):
+            return
+        kept.append(v)
+        moving.append(v)
+
     if company.gomotive_token:
-        moving.update(await gomotive.fetch_moving_vehicles(
+        for v in (await gomotive.fetch_moving_vehicles(
             company.gomotive_token,
             config.GOMOTIVE_BASE_URL,
             threshold_mph=config.MOVING_SPEED_THRESHOLD,
@@ -56,7 +75,8 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             # speed, so without this a truck whose device died days ago is a
             # permanent false anomaly (e.g. unit 1264, powered off 6 days).
             freshness_seconds=config.GOMOTIVE_GPS_FRESHNESS,
-        ))
+        )).values():
+            _add(v)
     if company.samsara_token:
         samsara_moving = await samsara.fetch_moving_vehicles(
             company.samsara_token,
@@ -68,7 +88,7 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
         )
         # The stats feed carries no VIN, so look the moving units' VINs up
         # separately and stamp them on — detection compares VIN against Quantum
-        # to tell two trucks that share a unit number apart.
+        # (and GoMotive) to tell two trucks that share a unit number apart.
         vins = await samsara.fetch_vins(
             [v.vehicle_id for v in samsara_moving.values() if v.vehicle_id],
             company.samsara_token,
@@ -77,28 +97,30 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
         for v in samsara_moving.values():
             if v.vehicle_id and v.vehicle_id in vins:
                 v.vin = vins[v.vehicle_id]
-        for unit, v in samsara_moving.items():
-            moving.setdefault(unit, v)
+        for v in samsara_moving.values():
+            _add(v)
     if not moving:
         logger.info("Poll[%s]: no moving vehicles on the movement provider(s).",
                     company.name)
         return
 
     # 2. Look those vehicles up in Quantum by unit number to read their last
-    #    report time (a stale report => ELD disconnected/offline).
+    #    report time (a stale report => ELD disconnected/offline). Dedupe the
+    #    unit numbers — two trucks can share one, but it's a single Quantum
+    #    record.
     quantum_lookup = await quantumeld.fetch_vehicles(
-        list(moving.keys()), company.quantum_token, quantum_base_url
+        list({v.unit_number for v in moving}), company.quantum_token, quantum_base_url
     )
 
     anomalies = find_anomalies(
         moving, quantum_lookup, threshold_seconds=config.ELD_STALE_THRESHOLD
     )
-    # Units GoMotive reports moving but Quantum has no record for (content:
+    # Units a provider reports moving but Quantum has no record for (content:
     # null). Normally these are units outside our Quantum account and are
     # safely ignored; log them so a real fleet vehicle that ever lands here
     # (i.e. a disconnection we'd otherwise miss) is visible.
     not_in_quantum = [u for u, v in quantum_lookup.items() if v is None]
-    found_in_quantum = len(moving) - len(not_in_quantum)
+    found_in_quantum = len(quantum_lookup) - len(not_in_quantum)
     logger.info(
         "Poll[%s]: %d moving, %d found in Quantum, %d anomalies",
         company.name, len(moving), found_in_quantum, len(anomalies),

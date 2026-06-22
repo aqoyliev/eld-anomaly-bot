@@ -10,7 +10,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from . import quantumeld
 from .quantumeld import QuantumVehicle
@@ -88,29 +88,36 @@ def vins_conflict(a: Optional[str], b: Optional[str]) -> bool:
 
 
 def find_anomalies(
-    moving: Dict[str, object],
+    moving: Iterable[object],
     quantum_lookup: Dict[str, Optional[QuantumVehicle]],
     *,
     threshold_seconds: int,
     now: Optional[datetime] = None,
 ) -> List[Anomaly]:
-    """``moving`` is keyed by the movement provider's unit number;
-    ``quantum_lookup`` maps the same unit numbers to their Quantum record (or
-    None if not found).
+    """``moving`` is an iterable of movement vehicles (each exposes
+    ``unit_number``/``vin``); ``quantum_lookup`` maps unit numbers to their
+    Quantum record (or None if not found).
+
+    A list rather than a unit-keyed dict because two different trucks can share
+    a unit number across providers (GoMotive vs Samsara) — both must be checked,
+    and the VIN comparison below decides which one (if either) is the truck
+    Quantum holds under that number.
 
     ``now`` defaults to UTC, matching Quantum's (naive) UTC report times."""
     now = now or datetime.utcnow()
     anomalies: List[Anomaly] = []
-    for unit_number, mv in moving.items():
+    for mv in moving:
+        unit_number = mv.unit_number
         q = quantum_lookup.get(unit_number)
         if q is None:
             continue
-        # Same unit number, different truck: fleets reuse unit numbers, so the
+        # Same unit number, different truck: fleets reuse unit numbers (and two
+        # providers can each have a different truck under one number), so the
         # Quantum record found by unit number can belong to a DIFFERENT vehicle
-        # than the one the movement provider reports moving. Comparing VINs
-        # (Motive/Samsara vs Quantum) catches that collision so we don't flag —
-        # or read staleness off — the wrong truck. VIN stays a guard on top of
-        # the unit-number match: only a clear mismatch is rejected.
+        # than this one. Comparing VINs (Motive/Samsara vs Quantum) catches that
+        # collision so we don't flag — or read staleness off — the wrong truck.
+        # VIN stays a guard on top of the unit-number match: only a clear
+        # mismatch is rejected.
         if vins_conflict(getattr(mv, "vin", None), q.vin):
             logger.info(
                 "Skipping %s: VIN mismatch (provider %s vs Quantum %s) — "
