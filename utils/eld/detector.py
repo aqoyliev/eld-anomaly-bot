@@ -2,15 +2,10 @@
 
 Flow: the movement provider (GoMotive or Samsara, per company) tells us which
 vehicles are moving; for each we have already looked up its ELD record(s) by
-unit number — Quantum, EVO, or both (a company may run a mixed ELD fleet).
-
-Quantum is authoritative wherever it holds the truck: an anomaly is a moving
-vehicle whose Quantum record is stale, and a fresh EVO reading must NOT
-suppress that — trucks can carry both devices, and a driver unplugging the
-Quantum ELD while the EVO box keeps reporting is exactly the fraud this bot
-exists to catch (real case: MZ CARGO unit 218118, rolling with Quantum dark
-for hours while fresh on EVO). EVO's staleness decides only for trucks
-Quantum doesn't hold under that (VIN-plausible) unit number.
+unit number — Quantum, EVO, or both (a company may run a mixed ELD fleet). An
+anomaly is a vehicle that is moving on the provider while EVERY ELD system
+that knows it reports stale: if either system is fresh, that's the truck's
+actual ELD reporting fine (the other's record is a leftover for the number).
 """
 
 import logging
@@ -37,9 +32,9 @@ _VIN_MISMATCH_TOLERANCE = 2
 class Anomaly:
     unit_number: str
     # QuantumVehicle or EvoVehicle — both expose the same attribute surface
-    # (vin, driver, last_report_time), so downstream code is duck-typed. The
-    # authoritative record for the unit: Quantum's when it holds the truck,
-    # else EVO's.
+    # (vin, driver, last_report_time), so downstream code is duck-typed. When
+    # a unit is stale in BOTH systems, this is the record with the most recent
+    # report (the truck's most plausible actual ELD).
     eld: object
     # Which ELD system the record above came from ("quantum"/"evo").
     eld_provider: str
@@ -152,15 +147,21 @@ def find_anomalies(
             matching.append((system, rec))
         if not matching:
             continue
-        # Quantum is authoritative when it holds the truck: its staleness
-        # alone decides, and a fresh EVO reading must not suppress it — a
-        # truck can carry both devices, and Quantum going dark while the EVO
-        # box keeps reporting is precisely the disconnection to flag (unit
-        # 218118). EVO decides only for trucks Quantum doesn't hold.
-        # ``candidates`` lists quantum first, so the first match wins.
-        system, rec = matching[0]
-        if quantumeld.is_disconnected(
-            rec, threshold_seconds=threshold_seconds, now=now
+        # Anomalous only when EVERY ELD system that knows the truck is stale.
+        # A fresh record in either system means its actual ELD is reporting
+        # fine — in a mixed Quantum+EVO fleet the other system's stale record
+        # for the same number is just a leftover, not a disconnection.
+        if any(
+            not quantumeld.is_disconnected(
+                rec, threshold_seconds=threshold_seconds, now=now
+            )
+            for _, rec in matching
         ):
-            anomalies.append(Anomaly(unit_number, rec, system, mv))
+            continue
+        # All stale: report off the most recently heard-from record (the
+        # truck's most plausible actual ELD).
+        system, rec = max(
+            matching, key=lambda sr: sr[1].last_report_time or datetime.min
+        )
+        anomalies.append(Anomaly(unit_number, rec, system, mv))
     return anomalies

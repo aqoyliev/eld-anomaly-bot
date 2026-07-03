@@ -2,9 +2,9 @@
 
 Runs on a faster cadence than the 5-min sweep (default every 2 min). An anomaly
 counts only moving-while-disconnected time, so for each active anomaly it:
-  1. re-checks the ELD system that flagged the event (its eld_provider,
-     Quantum or EVO) — a fresh, VIN-plausible report there means that device
-     reconnected, so the anomaly is resolved (all-clear);
+  1. checks the ELD side (Quantum and/or EVO, whichever the company has) — if
+     any VIN-plausible record reports fresh again, the device reconnected,
+     so the anomaly is resolved (all-clear);
   2. re-queries the unit's movement provider (GoMotive or Samsara, whichever
      flagged it) by vehicle id (cheap, just the flagged units) and, by
      comparing the position to the previous check, decides whether the truck has
@@ -124,20 +124,22 @@ async def track_once(bot: Bot, company: store.Company) -> None:
     now = datetime.utcnow()
 
     for e in events:
-        # 1) Reconnected? Re-check the SAME ELD system that flagged the event
-        #    (eld_provider, NULL = quantum): a fresh report THERE means that
-        #    device is back online. Mirrors detection precedence — a live EVO
-        #    box must not resolve a Quantum-flagged event (the Quantum ELD is
-        #    still dark) — and stays VIN-guarded so a same-number different-
-        #    truck record can't resolve the wrong event.
-        if (e.eld_provider or "quantum") == "evo":
-            rec = evo_map.get(quantum_key(e.unit_number))
-        else:
-            rec = quantum_map.get(e.unit_number)
-        if rec is not None and not vins_conflict(e.vin, rec.vin) and not (
-            quantumeld.is_disconnected(
+        # 1) Reconnected? A fresh report in ANY ELD system that plausibly holds
+        #    this truck (VIN-guarded: a same-number different-truck record in
+        #    the other system must not resolve — or keep open — this event)
+        #    means the ELD is back online.
+        eld_records = []
+        q = quantum_map.get(e.unit_number)
+        if q is not None and not vins_conflict(e.vin, q.vin):
+            eld_records.append(q)
+        ev = evo_map.get(quantum_key(e.unit_number))
+        if ev is not None and not vins_conflict(e.vin, ev.vin):
+            eld_records.append(ev)
+        if any(
+            not quantumeld.is_disconnected(
                 rec, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
             )
+            for rec in eld_records
         ):
             await store.resolve_event(e.id)
             # All-clear goes out even if reminders were muted.

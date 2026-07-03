@@ -2,9 +2,9 @@
 
 EVO is a second ELD-side provider, playing the same role as Quantum: the
 freshness of a unit's last report decides whether its ELD looks disconnected.
-A company may run Quantum, EVO, or both (mixed fleet) — Quantum stays
-authoritative for trucks it holds; EVO's staleness decides only for units
-Quantum doesn't know (see detector.find_anomalies for the precedence rule).
+A company may run Quantum, EVO, or both (mixed fleet) — detection checks a
+moving unit against every ELD system the company has and flags it only when
+all of them are stale (see detector.find_anomalies).
 
 Unlike Quantum's per-unit lookups, EVO returns the whole fleet in one call
 (``GET /units-by-usdot/{usdot}``), so a poll cycle costs a single request.
