@@ -44,7 +44,11 @@ SAMSARA_TOKEN = env.str("SAMSARA_TOKEN", "")  # seed-only (see note above)
 # EVO ELD tracking API — second ELD-side provider (same role as Quantum: report
 # freshness = disconnection signal). Per-company credentials (api key, provider
 # token, USDOT) live in the companies table; only the base URL is global.
-EVO_BASE_URL = env.str("EVO_BASE_URL", "https://read.evoeld.com/api/v2")
+# NOTE: EVO's docs describe /api/v2, but a carrier-issued key gets "Not found
+# provider token" there while the same key works on /api — so v1 is the
+# default. (Verified live 2026-07-03 against USDOT 3775005; the carrier key
+# also serves as BOTH the x-api-key and provider-token header values.)
+EVO_BASE_URL = env.str("EVO_BASE_URL", "https://read.evoeld.com/api")
 
 # Chat/channel that receives the anomaly alerts (e.g. -1001234567890).
 # Falls back to the first admin if not set. Seed-only (see note above).
