@@ -1,7 +1,8 @@
 """Async store for ELD-disconnection anomaly events.
 
 An "anomaly event" is a single continuous period during which a vehicle is
-disconnected on Quantum ELD while still moving on GoMotive. While the event
+disconnected on its ELD (Quantum or EVO) while still moving on its movement
+provider (GoMotive/Samsara). While the event
 is ongoing it stays ``resolved = 0`` (an *active*/flagged vehicle); once the
 vehicle stops being anomalous it is marked resolved. This keeps a single row
 per ongoing event, which is what gives us alert de-duplication.
@@ -35,6 +36,9 @@ CREATE TABLE IF NOT EXISTS companies (
     gomotive_token      TEXT,
     samsara_token       TEXT,
     quantum_token       TEXT,
+    evo_api_key         TEXT,
+    evo_provider_token  TEXT,
+    evo_usdot           TEXT,
     alert_chat_id       TEXT,
     active              INTEGER          NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -59,7 +63,8 @@ CREATE TABLE IF NOT EXISTS events (
     reminders_muted     INTEGER          NOT NULL DEFAULT 0,
     company_id          INTEGER,
     stopped_at          TEXT,
-    provider            TEXT
+    provider            TEXT,
+    eld_provider        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
@@ -71,6 +76,9 @@ CREATE TABLE IF NOT EXISTS companies (
     gomotive_token      TEXT,
     samsara_token       TEXT,
     quantum_token       TEXT,
+    evo_api_key         TEXT,
+    evo_provider_token  TEXT,
+    evo_usdot           TEXT,
     alert_chat_id       TEXT,
     active              INTEGER NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -95,7 +103,8 @@ CREATE TABLE IF NOT EXISTS events (
     reminders_muted     INTEGER NOT NULL DEFAULT 0,
     company_id          INTEGER,
     stopped_at          TEXT,
-    provider            TEXT
+    provider            TEXT,
+    eld_provider        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 """
@@ -127,6 +136,9 @@ _MIGRATIONS = [
     # re-queries motive_vehicle_id against that provider. NULL = gomotive
     # (every pre-Samsara event came from GoMotive).
     ("provider", "TEXT"),
+    # Which ELD system's stale record flagged the unit ("quantum"/"evo").
+    # NULL = quantum (every pre-EVO event came from Quantum).
+    ("eld_provider", "TEXT"),
 ]
 
 # Columns added to a pre-existing `companies` table (same idempotent ADD COLUMN
@@ -134,6 +146,11 @@ _MIGRATIONS = [
 _COMPANY_MIGRATIONS = [
     # Second movement provider: companies whose trucks carry Samsara devices.
     ("samsara_token", "TEXT"),
+    # Second ELD-side provider: EVO ELD (all three must be set to be used —
+    # see Company.evo_configured).
+    ("evo_api_key", "TEXT"),
+    ("evo_provider_token", "TEXT"),
+    ("evo_usdot", "TEXT"),
 ]
 
 # Migrations on a pre-existing `companies` table (CREATE TABLE above only covers
@@ -158,9 +175,18 @@ class Company:
     gomotive_token: Optional[str] = None
     samsara_token: Optional[str] = None
     quantum_token: Optional[str] = None
+    evo_api_key: Optional[str] = None
+    evo_provider_token: Optional[str] = None
+    evo_usdot: Optional[str] = None
     alert_chat_id: Optional[str] = None
     active: int = 1
     created_at: Optional[str] = None
+
+    @property
+    def evo_configured(self) -> bool:
+        """EVO needs all three credentials (api key + provider token + USDOT);
+        a partial set is treated as not configured."""
+        return bool(self.evo_api_key and self.evo_provider_token and self.evo_usdot)
 
 
 @dataclass
@@ -189,6 +215,9 @@ class AnomalyEvent:
     # Movement API that flagged the unit ("gomotive"/"samsara"); the tracker
     # re-queries motive_vehicle_id against it. NULL = gomotive (legacy rows).
     provider: Optional[str] = None
+    # ELD system whose stale record flagged the unit ("quantum"/"evo").
+    # NULL = quantum (legacy rows predate EVO support).
+    eld_provider: Optional[str] = None
 
     @property
     def disconnect_dt(self) -> Optional[datetime]:
@@ -453,14 +482,19 @@ async def add_company(
     gomotive_token: Optional[str],
     quantum_token: Optional[str],
     samsara_token: Optional[str] = None,
+    evo_api_key: Optional[str] = None,
+    evo_provider_token: Optional[str] = None,
+    evo_usdot: Optional[str] = None,
 ) -> Company:
     """Create a company and return it. ``alert_chat_id`` is left NULL — bind it to
     a Telegram group with :func:`bind_company_chat` before it will be polled."""
     now = datetime.utcnow().isoformat(timespec="seconds")
     company_id = await _insert_returning_id(
         "INSERT INTO companies (name, gomotive_token, samsara_token, "
-        "quantum_token, created_at) VALUES ($1, $2, $3, $4, $5)",
-        name, gomotive_token, samsara_token, quantum_token, now,
+        "quantum_token, evo_api_key, evo_provider_token, evo_usdot, created_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        name, gomotive_token, samsara_token, quantum_token,
+        evo_api_key, evo_provider_token, evo_usdot, now,
     )
     row = await _fetchrow("SELECT * FROM companies WHERE id = $1", company_id)
     return _row_to_company(row)
@@ -546,6 +580,7 @@ async def open_event(
     lat: Optional[float] = None,
     lon: Optional[float] = None,
     provider: Optional[str] = None,
+    eld_provider: Optional[str] = None,
 ) -> AnomalyEvent:
     """Create a new active anomaly event and return it (caller then alerts).
     ``last_alert_at`` is seeded with ``now`` since the caller sends the initial
@@ -554,10 +589,11 @@ async def open_event(
     event_id = await _insert_returning_id(
         "INSERT INTO events (company_id, unit_number, vin, driver, "
         "eld_disconnect_time, first_detected, last_seen, last_speed, last_location, "
-        "motive_vehicle_id, last_lat, last_lon, last_alert_at, provider) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+        "motive_vehicle_id, last_lat, last_lon, last_alert_at, provider, "
+        "eld_provider) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         company_id, unit_number, vin, driver, eld_disconnect_time, now, now, speed,
-        location, motive_vehicle_id, lat, lon, now, provider,
+        location, motive_vehicle_id, lat, lon, now, provider, eld_provider,
     )
     row = await _fetchrow("SELECT * FROM events WHERE id = $1", event_id)
     return _row_to_event(row)

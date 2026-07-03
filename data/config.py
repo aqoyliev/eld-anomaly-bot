@@ -41,6 +41,11 @@ GOMOTIVE_TOKEN = env.str("GOMOTIVE_TOKEN", "")  # seed-only (see note above)
 SAMSARA_BASE_URL = env.str("SAMSARA_BASE_URL", "https://api.samsara.com")
 SAMSARA_TOKEN = env.str("SAMSARA_TOKEN", "")  # seed-only (see note above)
 
+# EVO ELD tracking API — second ELD-side provider (same role as Quantum: report
+# freshness = disconnection signal). Per-company credentials (api key, provider
+# token, USDOT) live in the companies table; only the base URL is global.
+EVO_BASE_URL = env.str("EVO_BASE_URL", "https://read.evoeld.com/api/v2")
+
 # Chat/channel that receives the anomaly alerts (e.g. -1001234567890).
 # Falls back to the first admin if not set. Seed-only (see note above).
 ALERT_CHAT_ID = env.str("ALERT_CHAT_ID", ADMINS[0] if ADMINS else "")

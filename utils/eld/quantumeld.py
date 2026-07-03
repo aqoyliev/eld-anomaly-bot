@@ -186,15 +186,17 @@ async def fetch_vehicles(
 
 
 def is_disconnected(
-    vehicle: QuantumVehicle,
+    vehicle,
     *,
     threshold_seconds: int,
     now: Optional[datetime] = None,
 ) -> bool:
-    """True if the vehicle's last Quantum report is older than the threshold
-    (i.e. the ELD looks disconnected/offline).
+    """True if the vehicle's last ELD report is older than the threshold
+    (i.e. the ELD looks disconnected/offline). Duck-typed on
+    ``last_report_time``, so it accepts a QuantumVehicle or an EvoVehicle —
+    both ELD-side systems share this staleness rule.
 
-    Quantum report times are UTC (naive), so compare against UTC now."""
+    Report times are UTC (naive), so compare against UTC now."""
     if vehicle.last_report_time is None:
         return False
     now = now or datetime.utcnow()

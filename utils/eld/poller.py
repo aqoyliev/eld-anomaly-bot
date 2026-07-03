@@ -6,8 +6,9 @@ import logging
 from aiogram import Bot
 
 from data import config
-from . import gomotive, quantumeld, samsara, store
+from . import evoeld, gomotive, quantumeld, samsara, store
 from .detector import find_anomalies, vins_conflict
+from .quantumeld import quantum_key
 from .formatting import format_alert
 
 logger = logging.getLogger(__name__)
@@ -29,9 +30,9 @@ async def _send_alert(
 
 
 async def poll_once(bot: Bot, company: store.Company) -> None:
-    if not company.quantum_token:
-        logger.warning("Company %s has no Quantum token; skipping poll cycle.",
-                       company.name)
+    if not company.quantum_token and not company.evo_configured:
+        logger.warning("Company %s has no ELD-side credentials (Quantum or EVO); "
+                       "skipping poll cycle.", company.name)
         return
 
     if not company.gomotive_token and not company.samsara_token:
@@ -104,33 +105,60 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
                     company.name)
         return
 
-    # 2. Look those vehicles up in Quantum by unit number to read their last
-    #    report time (a stale report => ELD disconnected/offline). Dedupe the
-    #    unit numbers — two trucks can share one, but it's a single Quantum
-    #    record.
-    quantum_lookup = await quantumeld.fetch_vehicles(
-        list({v.unit_number for v in moving}), company.quantum_token, quantum_base_url
+    # 2. Look those vehicles up on the ELD side by unit number to read their
+    #    last report time (a stale report => ELD disconnected/offline). Dedupe
+    #    the unit numbers — two trucks can share one, but each system holds a
+    #    single record per number. A company may run Quantum, EVO, or both;
+    #    detection flags a unit only when every system that knows it is stale.
+    unit_numbers = list({v.unit_number for v in moving})
+    quantum_lookup = (
+        await quantumeld.fetch_vehicles(
+            unit_numbers, company.quantum_token, quantum_base_url
+        )
+        if company.quantum_token else {}
     )
+    evo_lookup: dict = {}
+    if company.evo_configured:
+        try:
+            # One call returns the whole EVO fleet; match the moving units by
+            # the same normalized key used for Quantum lookups.
+            snapshot = await evoeld.fetch_units(
+                company.evo_api_key, company.evo_provider_token,
+                company.evo_usdot, config.EVO_BASE_URL,
+            )
+            evo_lookup = {u: snapshot.get(quantum_key(u)) for u in unit_numbers}
+        except Exception:
+            # Degrade to Quantum-only for this cycle rather than aborting the
+            # company's poll; for an EVO-only company this yields "not in ELD"
+            # for every unit (no false anomalies, loudly logged).
+            logger.exception(
+                "Poll[%s]: EVO fetch failed — units treated as not in EVO "
+                "this cycle.", company.name,
+            )
 
     anomalies = find_anomalies(
-        moving, quantum_lookup, threshold_seconds=config.ELD_STALE_THRESHOLD
+        moving, quantum_lookup, evo_lookup=evo_lookup,
+        threshold_seconds=config.ELD_STALE_THRESHOLD,
     )
-    # Units a provider reports moving but Quantum has no record for (content:
-    # null). Normally these are units outside our Quantum account and are
+    # Units a provider reports moving but no ELD system has a record for.
+    # Normally these are units outside our Quantum/EVO accounts and are
     # safely ignored; log them so a real fleet vehicle that ever lands here
     # (i.e. a disconnection we'd otherwise miss) is visible.
-    not_in_quantum = [u for u, v in quantum_lookup.items() if v is None]
-    found_in_quantum = len(quantum_lookup) - len(not_in_quantum)
+    not_in_eld = [
+        u for u in unit_numbers
+        if quantum_lookup.get(u) is None and evo_lookup.get(u) is None
+    ]
+    found_in_eld = len(unit_numbers) - len(not_in_eld)
     logger.info(
-        "Poll[%s]: %d moving, %d found in Quantum, %d anomalies",
-        company.name, len(moving), found_in_quantum, len(anomalies),
+        "Poll[%s]: %d moving, %d found on the ELD side, %d anomalies",
+        company.name, len(moving), found_in_eld, len(anomalies),
     )
-    if not_in_quantum:
-        logger.info("Poll[%s]: %d moving units not in Quantum (skipped): %s",
-                    company.name, len(not_in_quantum), not_in_quantum)
+    if not_in_eld:
+        logger.info("Poll[%s]: %d moving units in no ELD system (skipped): %s",
+                    company.name, len(not_in_eld), not_in_eld)
 
     for anomaly in anomalies:
-        q, gm = anomaly.quantum, anomaly.movement
+        q, gm = anomaly.eld, anomaly.movement
         # The provider's current coordinates = where the truck actually is right now.
         location = gm.coordinates_label
         existing = await store.get_active_event(company.id, anomaly.unit_number)
@@ -161,6 +189,7 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             lat=gm.latitude,
             lon=gm.longitude,
             provider=gm.provider,
+            eld_provider=anomaly.eld_provider,
         )
         await _send_alert(bot, company, event)
 

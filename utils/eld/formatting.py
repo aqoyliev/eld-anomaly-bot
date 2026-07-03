@@ -58,6 +58,12 @@ def _provider_label(event: AnomalyEvent) -> str:
     return "Samsara" if event.provider == "samsara" else "GoMotive"
 
 
+def _eld_label(event: AnomalyEvent) -> str:
+    """Display name of the ELD system whose stale record flagged the event.
+    Legacy rows (eld_provider NULL) predate EVO support, so they were Quantum."""
+    return "EVO ELD" if event.eld_provider == "evo" else "Quantum ELD"
+
+
 def _provider_badge(event: AnomalyEvent) -> str:
     """Compact provider tag for one-line listings (/status, /history): the
     provider name with an emoji so the source device is visible at a glance."""
@@ -74,7 +80,7 @@ def format_alert(event: AnomalyEvent, company_name: Optional[str] = None) -> str
         f"<b>Current speed:</b> {_fmt_speed(event.last_speed)}\n"
         f"<b>ELD disconnected at:</b> {_fmt_time(event.eld_disconnect_time)}\n"
         f"<b>Anomaly duration:</b> {human_duration(event.duration_seconds())}\n\n"
-        f"<i>Disconnected on Quantum ELD but still moving on {_provider_label(event)}.</i>"
+        f"<i>Disconnected on {_eld_label(event)} but still moving on {_provider_label(event)}.</i>"
     )
 
 

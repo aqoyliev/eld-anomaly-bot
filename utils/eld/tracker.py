@@ -2,7 +2,8 @@
 
 Runs on a faster cadence than the 5-min sweep (default every 2 min). An anomaly
 counts only moving-while-disconnected time, so for each active anomaly it:
-  1. checks Quantum — if the ELD reports fresh again, the device reconnected,
+  1. checks the ELD side (Quantum and/or EVO, whichever the company has) — if
+     any VIN-plausible record reports fresh again, the device reconnected,
      so the anomaly is resolved (all-clear);
   2. re-queries the unit's movement provider (GoMotive or Samsara, whichever
      flagged it) by vehicle id (cheap, just the flagged units) and, by
@@ -27,8 +28,10 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from data import config
-from . import gomotive, quantumeld, samsara, store
+from . import evoeld, gomotive, quantumeld, samsara, store
+from .detector import vins_conflict
 from .formatting import format_reconnected, format_reminder, format_stopped
+from .quantumeld import quantum_key
 
 logger = logging.getLogger(__name__)
 
@@ -100,16 +103,43 @@ async def track_once(bot: Bot, company: store.Company) -> None:
         )
         if ss_ids else {}
     )
-    quantum_map = await quantumeld.fetch_vehicles(
-        [e.unit_number for e in events], company.quantum_token, quantum_base_url
+    quantum_map = (
+        await quantumeld.fetch_vehicles(
+            [e.unit_number for e in events], company.quantum_token, quantum_base_url
+        )
+        if company.quantum_token else {}
     )
+    evo_map: dict = {}
+    if company.evo_configured:
+        try:
+            evo_map = await evoeld.fetch_units(
+                company.evo_api_key, company.evo_provider_token,
+                company.evo_usdot, config.EVO_BASE_URL,
+            )
+        except Exception:
+            # No EVO data this cycle: affected events simply stay open (no
+            # false resolve), same stance as a failed Quantum lookup.
+            logger.exception("Tracker[%s]: EVO fetch failed — skipping EVO "
+                             "reconnect checks this cycle.", company.name)
     now = datetime.utcnow()
 
     for e in events:
-        # 1) Reconnected? A fresh Quantum report means the ELD is back online.
+        # 1) Reconnected? A fresh report in ANY ELD system that plausibly holds
+        #    this truck (VIN-guarded: a same-number different-truck record in
+        #    the other system must not resolve — or keep open — this event)
+        #    means the ELD is back online.
+        eld_records = []
         q = quantum_map.get(e.unit_number)
-        if q is not None and not quantumeld.is_disconnected(
-            q, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
+        if q is not None and not vins_conflict(e.vin, q.vin):
+            eld_records.append(q)
+        ev = evo_map.get(quantum_key(e.unit_number))
+        if ev is not None and not vins_conflict(e.vin, ev.vin):
+            eld_records.append(ev)
+        if any(
+            not quantumeld.is_disconnected(
+                rec, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
+            )
+            for rec in eld_records
         ):
             await store.resolve_event(e.id)
             # All-clear goes out even if reminders were muted.
