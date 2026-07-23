@@ -44,11 +44,15 @@ SAMSARA_TOKEN = env.str("SAMSARA_TOKEN", "")  # seed-only (see note above)
 # EVO ELD tracking API — second ELD-side provider (same role as Quantum: report
 # freshness = disconnection signal). Per-company credentials (api key, provider
 # token, USDOT) live in the companies table; only the base URL is global.
-# NOTE: EVO's docs describe /api/v2, but a carrier-issued key gets "Not found
-# provider token" there while the same key works on /api — so v1 is the
-# default. (Verified live 2026-07-03 against USDOT 3775005; the carrier key
-# also serves as BOTH the x-api-key and provider-token header values.)
-EVO_BASE_URL = env.str("EVO_BASE_URL", "https://read.evoeld.com/api")
+# NOTE: EVO ELD and TT ELD (fiveeld.com) run the SAME platform software on
+# SEPARATE tenants — a key issued on one tenant is unknown to the other. The
+# MZ CARGO account (USDOT 3775005) lives on the fiveeld tenant, so the base is
+# read.fiveeld.com, not read.evoeld.com. The path IS /api/v2 (the earlier
+# "/api works, v2 doesn't" note was a misdiagnosis: we were hitting the wrong
+# tenant, so it failed on provider-token before ever validating the api-key).
+# x-api-key and provider-token are DISTINCT values — see evo-eld-api-reference.
+# Verified live 2026-07-23: read.fiveeld.com/api/v2 returns the fleet snapshot.
+EVO_BASE_URL = env.str("EVO_BASE_URL", "https://read.fiveeld.com/api/v2")
 
 # Chat/channel that receives the anomaly alerts (e.g. -1001234567890).
 # Falls back to the first admin if not set. Seed-only (see note above).
