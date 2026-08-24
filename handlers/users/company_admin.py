@@ -11,6 +11,7 @@ Commands (restricted to config.ADMINS via the IsAdmin filter):
     /cancel       abort the /addcompany wizard
 """
 
+import re
 from html import escape
 
 from aiogram import types
@@ -94,8 +95,15 @@ async def add_name(message: types.Message, state: FSMContext):
 
 async def _consume_secret(message: types.Message) -> str:
     """Read a token from the message and delete the message so the secret doesn't
-    linger in chat history. Returns the token text."""
-    token = (message.text or "").strip()
+    linger in chat history. Returns the token text.
+
+    Strips ALL whitespace, not just the ends: a token pasted across two lines
+    keeps its embedded newline through .strip(), and aiohttp refuses to put a
+    newline in a request header — so the stored value kills the whole poll cycle
+    with a ValueError instead of failing as a clean 401. Real case: a Samsara
+    token arrived with 11 stray characters on a second line and every cycle died
+    in _serialize_headers. No provider token contains whitespace."""
+    token = re.sub(r"\s+", "", message.text or "")
     try:
         await message.delete()
     except Exception:
