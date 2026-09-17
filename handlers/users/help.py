@@ -7,7 +7,8 @@ from loader import dp
 USER_HELP = (
     "<b>ELD Disconnection Bot</b>\n"
     "I watch your fleet and flag any unit that's moving on GoMotive/Samsara "
-    "while its ELD (Quantum or EVO) has gone silent (a likely disconnection). "
+    "while its ELD (Quantum, EVO or Vitality) has gone silent (a likely "
+    "disconnection). "
     "Alerts land in this group automatically.\n\n"
     "<b>Commands</b>\n"
     "/status — vehicles currently flagged for this group's company\n"
@@ -19,7 +20,7 @@ USER_HELP = (
 ADMIN_HELP = (
     "<b>ELD Disconnection Bot — admin help</b>\n"
     "I watch each company's fleet and flag any unit moving on its movement "
-    "provider (GoMotive or Samsara) while its ELD (Quantum or EVO) has gone "
+    "provider (GoMotive or Samsara) while its ELD (Quantum, EVO or Vitality) has gone "
     "silent. Each company has its own tokens and alert group.\n\n"
     "<b>Everyone (in a company's group)</b>\n"
     "/status — vehicles currently flagged for that group's company\n"
@@ -34,7 +35,8 @@ ADMIN_HELP = (
     "/companies — list companies, their state, and masked tokens\n"
     "/activate &lt;name|id&gt; — resume polling a company\n"
     "/deactivate &lt;name|id&gt; — stop polling a company (history kept)\n"
-    "/cancel — abort the /addcompany wizard\n\n"
+    "/seteld &lt;name|id&gt; &lt;quantum|vitality&gt; — set or remove that ELD credential\n"
+    "/cancel — abort the /addcompany or /seteld wizard\n\n"
     "<b>Add a company</b>\n"
     "1. DM me <code>/addcompany</code> and follow the prompts.\n"
     "2. Add me to that company's group and send <code>/bindhere &lt;name&gt;</code> "

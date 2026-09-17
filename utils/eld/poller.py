@@ -6,7 +6,7 @@ import logging
 from aiogram import Bot
 
 from data import config
-from . import evoeld, gomotive, quantumeld, samsara, store
+from . import evoeld, gomotive, quantumeld, samsara, store, vitalityeld
 from .detector import find_anomalies, vins_conflict
 from .quantumeld import quantum_key
 from .formatting import format_alert
@@ -30,9 +30,9 @@ async def _send_alert(
 
 
 async def poll_once(bot: Bot, company: store.Company) -> None:
-    if not company.quantum_token and not company.evo_configured:
-        logger.warning("Company %s has no ELD-side credentials (Quantum or EVO); "
-                       "skipping poll cycle.", company.name)
+    if not company.has_eld:
+        logger.warning("Company %s has no ELD-side credentials (Quantum, EVO or "
+                       "Vitality); skipping poll cycle.", company.name)
         return
 
     if not company.gomotive_token and not company.samsara_token:
@@ -108,8 +108,9 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
     # 2. Look those vehicles up on the ELD side by unit number to read their
     #    last report time (a stale report => ELD disconnected/offline). Dedupe
     #    the unit numbers — two trucks can share one, but each system holds a
-    #    single record per number. A company may run Quantum, EVO, or both;
-    #    detection flags a unit only when every system that knows it is stale.
+    #    single record per number. A company may run any mix of Quantum, EVO
+    #    and Vitality; detection flags a unit only when every system that knows
+    #    it is stale.
     unit_numbers = list({v.unit_number for v in moving})
     quantum_lookup = (
         await quantumeld.fetch_vehicles(
@@ -136,17 +137,37 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
                 "this cycle.", company.name,
             )
 
+    vitality_lookup: dict = {}
+    if company.vitality_configured:
+        try:
+            # Whole fleet in one paginated call, like EVO.
+            snapshot = await vitalityeld.fetch_units(
+                company.vitality_company_key, config.VITALITY_PROVIDER_KEY,
+                config.VITALITY_BASE_URL,
+            )
+            vitality_lookup = {
+                u: vitalityeld.lookup(snapshot, u) for u in unit_numbers
+            }
+        except Exception:
+            # Same stance as EVO: degrade this cycle, no false anomalies.
+            logger.exception(
+                "Poll[%s]: Vitality fetch failed — units treated as not in "
+                "Vitality this cycle.", company.name,
+            )
+
     anomalies = find_anomalies(
         moving, quantum_lookup, evo_lookup=evo_lookup,
+        vitality_lookup=vitality_lookup,
         threshold_seconds=config.ELD_STALE_THRESHOLD,
     )
     # Units a provider reports moving but no ELD system has a record for.
-    # Normally these are units outside our Quantum/EVO accounts and are
+    # Normally these are units outside our Quantum/EVO/Vitality accounts and are
     # safely ignored; log them so a real fleet vehicle that ever lands here
     # (i.e. a disconnection we'd otherwise miss) is visible.
     not_in_eld = [
         u for u in unit_numbers
         if quantum_lookup.get(u) is None and evo_lookup.get(u) is None
+        and vitality_lookup.get(u) is None
     ]
     found_in_eld = len(unit_numbers) - len(not_in_eld)
     logger.info(

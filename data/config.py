@@ -54,6 +54,13 @@ SAMSARA_TOKEN = env.str("SAMSARA_TOKEN", "")  # seed-only (see note above)
 # Verified live 2026-07-23: read.fiveeld.com/api/v2 returns the fleet snapshot.
 EVO_BASE_URL = env.str("EVO_BASE_URL", "https://read.fiveeld.com/api/v2")
 
+# Vitality ELD (DriveHOS Global Integration API v2) — third ELD-side provider,
+# same role as Quantum/EVO. The provider key identifies this bot and is shared by
+# every company; each carrier's own key lives in companies.vitality_company_key
+# (set with /seteld or the /addcompany wizard).
+VITALITY_BASE_URL = env.str("VITALITY_BASE_URL", "https://api.drivehos.app")
+VITALITY_PROVIDER_KEY = env.str("VITALITY_PROVIDER_KEY", "")
+
 # Chat/channel that receives the anomaly alerts (e.g. -1001234567890).
 # Falls back to the first admin if not set. Seed-only (see note above).
 ALERT_CHAT_ID = env.str("ALERT_CHAT_ID", ADMINS[0] if ADMINS else "")

@@ -2,7 +2,8 @@
 
 Flow: the movement provider (GoMotive or Samsara, per company) tells us which
 vehicles are moving; for each we have already looked up its ELD record(s) by
-unit number — Quantum, EVO, or both (a company may run a mixed ELD fleet). An
+unit number — Quantum, EVO, Vitality, or any mix (a company may run a mixed
+ELD fleet). An
 anomaly is a vehicle that is moving on the provider while EVERY ELD system
 that knows it reports stale: if either system is fresh, that's the truck's
 actual ELD reporting fine (the other's record is a leftover for the number).
@@ -31,12 +32,12 @@ _VIN_MISMATCH_TOLERANCE = 2
 @dataclass
 class Anomaly:
     unit_number: str
-    # QuantumVehicle or EvoVehicle — both expose the same attribute surface
+    # QuantumVehicle, EvoVehicle or VitalityVehicle — all expose the same attribute surface
     # (vin, driver, last_report_time), so downstream code is duck-typed. When
     # a unit is stale in BOTH systems, this is the record with the most recent
     # report (the truck's most plausible actual ELD).
     eld: object
-    # Which ELD system the record above came from ("quantum"/"evo").
+    # Which ELD system the record above came from ("quantum"/"evo"/"vitality").
     eld_provider: str
     # GoMotiveVehicle or SamsaraVehicle — both expose the same attribute
     # surface (speed, latitude/longitude, vehicle_id, coordinates_label,
@@ -100,11 +101,13 @@ def find_anomalies(
     quantum_lookup: Dict[str, Optional[QuantumVehicle]],
     *,
     evo_lookup: Optional[Dict[str, object]] = None,
+    vitality_lookup: Optional[Dict[str, object]] = None,
     threshold_seconds: int,
     now: Optional[datetime] = None,
 ) -> List[Anomaly]:
     """``moving`` is an iterable of movement vehicles (each exposes
-    ``unit_number``/``vin``); ``quantum_lookup``/``evo_lookup`` map unit numbers
+    ``unit_number``/``vin``); ``quantum_lookup``/``evo_lookup``/
+    ``vitality_lookup`` map unit numbers
     to that system's record (or None if not found there).
 
     A list rather than a unit-keyed dict because two different trucks can share
@@ -115,6 +118,7 @@ def find_anomalies(
     ``now`` defaults to UTC, matching the (naive) UTC report times."""
     now = now or datetime.utcnow()
     evo_lookup = evo_lookup or {}
+    vitality_lookup = vitality_lookup or {}
     anomalies: List[Anomaly] = []
     for mv in moving:
         unit_number = mv.unit_number
@@ -123,6 +127,7 @@ def find_anomalies(
             for system, rec in (
                 ("quantum", quantum_lookup.get(unit_number)),
                 ("evo", evo_lookup.get(unit_number)),
+                ("vitality", vitality_lookup.get(unit_number)),
             )
             if rec is not None
         ]

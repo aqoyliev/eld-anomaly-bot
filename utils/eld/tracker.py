@@ -2,7 +2,8 @@
 
 Runs on a faster cadence than the 5-min sweep (default every 2 min). An anomaly
 counts only moving-while-disconnected time, so for each active anomaly it:
-  1. checks the ELD side (Quantum and/or EVO, whichever the company has) — if
+  1. checks the ELD side (Quantum, EVO and/or Vitality, whichever the
+     company has) — if
      any VIN-plausible record reports fresh again, the device reconnected,
      so the anomaly is resolved (all-clear);
   2. re-queries the unit's movement provider (GoMotive or Samsara, whichever
@@ -28,7 +29,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from data import config
-from . import evoeld, gomotive, quantumeld, samsara, store
+from . import evoeld, gomotive, quantumeld, samsara, store, vitalityeld
 from .detector import vins_conflict
 from .formatting import format_reconnected, format_reminder, format_stopped
 from .quantumeld import quantum_key
@@ -121,6 +122,17 @@ async def track_once(bot: Bot, company: store.Company) -> None:
             # false resolve), same stance as a failed Quantum lookup.
             logger.exception("Tracker[%s]: EVO fetch failed — skipping EVO "
                              "reconnect checks this cycle.", company.name)
+    vitality_map: dict = {}
+    if company.vitality_configured:
+        try:
+            vitality_map = await vitalityeld.fetch_units(
+                company.vitality_company_key, config.VITALITY_PROVIDER_KEY,
+                config.VITALITY_BASE_URL,
+            )
+        except Exception:
+            # Same stance as EVO: affected events stay open (no false resolve).
+            logger.exception("Tracker[%s]: Vitality fetch failed — skipping "
+                             "Vitality reconnect checks this cycle.", company.name)
     now = datetime.utcnow()
 
     for e in events:
@@ -135,6 +147,9 @@ async def track_once(bot: Bot, company: store.Company) -> None:
         ev = evo_map.get(quantum_key(e.unit_number))
         if ev is not None and not vins_conflict(e.vin, ev.vin):
             eld_records.append(ev)
+        vt = vitalityeld.lookup(vitality_map, e.unit_number)
+        if vt is not None and not vins_conflict(e.vin, vt.vin):
+            eld_records.append(vt)
         if any(
             not quantumeld.is_disconnected(
                 rec, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now

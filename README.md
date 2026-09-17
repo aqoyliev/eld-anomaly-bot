@@ -74,7 +74,8 @@ Disconnected on Quantum ELD but still moving on GoMotive.
 | `/companies`   | List all companies (tokens masked)                             |
 | `/activate`    | Re-activate a company: `/activate <name or id>`               |
 | `/deactivate`  | Stop polling a company (history kept): `/deactivate <name or id>` |
-| `/cancel`      | Abort the `/addcompany` wizard                                 |
+| `/seteld`      | Set or remove a company's ELD credential: `/seteld <name or id> <quantum\|vitality>`, then send the value (auto-deleted) or `remove` |
+| `/cancel`      | Abort the `/addcompany` or `/seteld` wizard                    |
 
 ## Multi-company
 
@@ -139,6 +140,8 @@ All settings live in `.env` (gitignored, never committed):
 | `ADMINS`                 | —                                                | Comma-separated Telegram admin user IDs |
 | `QUANTUM_BASE_URL`       | `https://api.quantumeld.com/logger/external`     | Quantum ELD API base URL |
 | `QUANTUM_TOKEN`          | —                                                | **Seed-only:** Quantum token for the auto-seeded `default` company (see [Multi-company](#multi-company)) |
+| `VITALITY_BASE_URL`      | `https://api.drivehos.app`                       | Vitality ELD (DriveHOS Global Integration API v2) base URL |
+| `VITALITY_PROVIDER_KEY`  | —                                                | `X-API-Provider-Key` identifying this bot (issued by office@drivehos.org). Required for any Vitality company; each carrier's own key is set with `/seteld <company> vitality`. |
 | `GOMOTIVE_BASE_URL`      | `https://api.gomotive.com`                       | GoMotive API base URL (constant for all companies) |
 | `GOMOTIVE_TOKEN`         | —                                                | **Seed-only:** Motive API key for the `default` company |
 | `SAMSARA_BASE_URL`       | `https://api.samsara.com`                        | Samsara API base URL (constant for all companies) |
@@ -169,6 +172,7 @@ Deploying to Railway? See **[SETUP.md → Deploy to Railway](SETUP.md#deploy-to-
 │   ├── gomotive.py            # Motive client (v1+v3, pagination, kph→mph)
 │   ├── samsara.py             # Samsara client (same interface as gomotive)
 │   ├── quantumeld.py          # Quantum ELD per-vehicle lookups
+│   ├── vitalityeld.py         # Vitality ELD fleet snapshot (DriveHOS API v2)
 │   ├── detector.py            # Anomaly cross-reference
 │   ├── store.py               # companies + events; per-company scoping, seed/backfill
 │   ├── poller.py              # 5-min loop, per company

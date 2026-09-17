@@ -18,6 +18,7 @@ ADMIN_COMMANDS = DEFAULT_COMMANDS + [
     types.BotCommand("companies", "List companies"),
     types.BotCommand("activate", "Activate a company"),
     types.BotCommand("deactivate", "Deactivate a company"),
+    types.BotCommand("seteld", "Set a company's Quantum/Vitality credential"),
 ]
 
 
