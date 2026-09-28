@@ -83,6 +83,16 @@ async def track_once(bot: Bot, company: store.Company) -> None:
     if not events:
         return
 
+    # /ignoreunit entries: a muted unit's event is left untouched — no reminders,
+    # no all-clear. The command closes open events when it runs; this guard
+    # covers an event that was already open when the mute landed.
+    ignored = await store.ignored_unit_keys(company.id)
+    if ignored:
+        events = [e for e in events
+                  if store.ignore_key(e.unit_number) not in ignored]
+        if not events:
+            return
+
     quantum_base_url = config.QUANTUM_BASE_URL
 
     # Targeted movement re-query for just the flagged units + Quantum freshness.

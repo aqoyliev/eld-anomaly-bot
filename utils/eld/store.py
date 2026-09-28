@@ -20,10 +20,11 @@ translated to ``?`` for SQLite (our queries never repeat or reorder a param).
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from data import config
+from .quantumeld import quantum_key
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,17 @@ CREATE TABLE IF NOT EXISTS events (
     eld_provider        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
+CREATE TABLE IF NOT EXISTS unit_ignores (
+    id                  BIGSERIAL PRIMARY KEY,
+    company_id          INTEGER          NOT NULL,
+    unit_key            TEXT             NOT NULL,
+    label               TEXT,
+    note                TEXT,
+    until               TEXT,
+    created_at          TEXT             NOT NULL,
+    created_by          TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_unit_ignores ON unit_ignores (company_id, unit_key);
 """
 
 _SCHEMA_SQLITE = """
@@ -109,6 +121,17 @@ CREATE TABLE IF NOT EXISTS events (
     eld_provider        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
+CREATE TABLE IF NOT EXISTS unit_ignores (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id          INTEGER NOT NULL,
+    unit_key            TEXT    NOT NULL,
+    label               TEXT,
+    note                TEXT,
+    until               TEXT,
+    created_at          TEXT    NOT NULL,
+    created_by          TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_unit_ignores ON unit_ignores (company_id, unit_key);
 """
 
 # Created after migrations run, since on a legacy DB ``company_id`` only exists
@@ -206,6 +229,28 @@ class Company:
         """At least one ELD-side system is usable for this company."""
         return bool(self.quantum_token or self.evo_configured
                     or self.vitality_configured)
+
+
+@dataclass
+class UnitIgnore:
+    """One unit an admin told the bot to stop flagging (see the ignored-units
+    section below for why that is ever the right answer)."""
+    id: int
+    company_id: int
+    unit_key: str
+    label: Optional[str]
+    note: Optional[str]
+    until: Optional[str]
+    created_at: str
+    created_by: Optional[str]
+
+    @property
+    def expires_in_seconds(self) -> Optional[int]:
+        """Seconds left before the entry lapses; None when it never expires."""
+        until = _parse(self.until)
+        if until is None:
+            return None
+        return max(0, int((until - datetime.utcnow()).total_seconds()))
 
 
 @dataclass
@@ -592,6 +637,129 @@ async def active_companies() -> List[Company]:
         "ORDER BY id"
     )
     return [_row_to_company(r) for r in rows]
+
+
+# --- ignored units -----------------------------------------------------------
+
+# Units an admin has told the bot to stop flagging. The real case this exists
+# for: a carrier pulls the Motive device out of a parked truck and runs it in a
+# different one. The movement provider then keeps reporting the OLD unit number
+# as moving while that truck's own ELD is legitimately offline — a permanent
+# false anomaly that no ELD-side credential can fix and no VIN check can catch
+# (both sides still carry the parked truck's VIN). Muting the unit is the only
+# honest answer until the carrier reassigns the device, so entries are normally
+# time-limited: a forgotten mute is an unmonitored truck.
+
+
+def ignore_key(unit_number: str) -> str:
+    """Canonical form used to match an ignore entry against a live unit number.
+
+    Uses the same normalization as the ELD lookups (:func:`quantum_key`, which
+    strips owner tags and driver names), so an admin can copy the number
+    straight out of an alert: "unit 796801  MAXIMO PAEZ" and "796801" both land
+    on the key "796801"."""
+    return quantum_key(str(unit_number)).strip().upper()
+
+
+async def _purge_expired_ignores() -> None:
+    """Drop lapsed entries so an ignore can never outlive its window. Logged,
+    because the unit is monitored again from that moment on. Timestamps are
+    ISO-8601 text in a fixed format, so a string compare is a time compare."""
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    rows = await _fetch(
+        "SELECT * FROM unit_ignores WHERE until IS NOT NULL AND until <= $1", now
+    )
+    if not rows:
+        return
+    await _execute(
+        "DELETE FROM unit_ignores WHERE until IS NOT NULL AND until <= $1", now
+    )
+    for row in rows:
+        logger.info(
+            "Ignore window expired for company %s unit %s — flagging it again.",
+            row["company_id"], row["label"] or row["unit_key"],
+        )
+
+
+async def add_unit_ignore(
+    company_id: int,
+    unit_number: str,
+    *,
+    days: Optional[int] = None,
+    note: Optional[str] = None,
+    created_by: Optional[str] = None,
+) -> UnitIgnore:
+    """Ignore a unit for this company, replacing any existing entry for it.
+
+    ``days=None`` never expires. ``label`` keeps the number as the admin typed
+    it, so the list reads like the alert it came from."""
+    now = datetime.utcnow()
+    until = (
+        (now + timedelta(days=days)).isoformat(timespec="seconds")
+        if days else None
+    )
+    key = ignore_key(unit_number)
+    await _execute(
+        "DELETE FROM unit_ignores WHERE company_id = $1 AND unit_key = $2",
+        company_id, key,
+    )
+    await _execute(
+        "INSERT INTO unit_ignores (company_id, unit_key, label, note, until, "
+        "created_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        company_id, key, unit_number.strip(), note, until,
+        now.isoformat(timespec="seconds"), created_by,
+    )
+    row = await _fetchrow(
+        "SELECT * FROM unit_ignores WHERE company_id = $1 AND unit_key = $2",
+        company_id, key,
+    )
+    return UnitIgnore(**row)
+
+
+async def remove_unit_ignore(
+    company_id: int, unit_number: str
+) -> Optional[UnitIgnore]:
+    """Stop ignoring a unit. Returns the entry that was removed, or None when
+    the unit wasn't on the list."""
+    key = ignore_key(unit_number)
+    row = await _fetchrow(
+        "SELECT * FROM unit_ignores WHERE company_id = $1 AND unit_key = $2",
+        company_id, key,
+    )
+    if row is None:
+        return None
+    await _execute(
+        "DELETE FROM unit_ignores WHERE company_id = $1 AND unit_key = $2",
+        company_id, key,
+    )
+    return UnitIgnore(**row)
+
+
+async def list_unit_ignores(company_id: Optional[int] = None) -> List[UnitIgnore]:
+    """Ignore entries in force (all companies when ``company_id`` is None),
+    newest first. Lapsed ones are purged first, so the list is never a lie."""
+    await _purge_expired_ignores()
+    if company_id is None:
+        rows = await _fetch(
+            "SELECT * FROM unit_ignores ORDER BY company_id, created_at DESC"
+        )
+    else:
+        rows = await _fetch(
+            "SELECT * FROM unit_ignores WHERE company_id = $1 "
+            "ORDER BY created_at DESC",
+            company_id,
+        )
+    return [UnitIgnore(**r) for r in rows]
+
+
+async def ignored_unit_keys(company_id: int) -> set:
+    """Normalized keys of this company's currently-ignored units, for the poller
+    and tracker to skip. Lapsed entries are purged first."""
+    await _purge_expired_ignores()
+    rows = await _fetch(
+        "SELECT unit_key FROM unit_ignores WHERE company_id = $1", company_id
+    )
+    return {r["unit_key"] for r in rows}
 
 
 # --- public API (same names/semantics as the old sync store) -----------------

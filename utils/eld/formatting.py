@@ -35,6 +35,12 @@ def _fmt_time(value: Optional[str]) -> str:
         return value
 
 
+def format_time(value: Optional[str]) -> str:
+    """Public alias for :func:`_fmt_time`, so other modules can render a stored
+    (naive-UTC) timestamp in the same Eastern format the alerts use."""
+    return _fmt_time(value)
+
+
 def _fmt_speed(speed: Optional[float]) -> str:
     # GoMotive (esp. the v1 endpoint the tracker uses) sometimes reports a null
     # speed for a reading; display that as "0 mph" rather than "unknown". This is

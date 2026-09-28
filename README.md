@@ -75,6 +75,9 @@ Disconnected on Quantum ELD but still moving on GoMotive.
 | `/activate`    | Re-activate a company: `/activate <name or id>`               |
 | `/deactivate`  | Stop polling a company (history kept): `/deactivate <name or id>` |
 | `/seteld`      | Set or remove a company's ELD credential: `/seteld <name or id> <quantum\|vitality>`, then send the value (auto-deleted) or `remove` |
+| `/ignoreunit`  | Stop flagging one unit: `/ignoreunit <name or id> <unit> [days]` (default 30 days, `0` = until removed). For a known false anomaly — e.g. a parked truck whose Motive device now runs in another truck, so the old number keeps "moving" while its own ELD is legitimately offline |
+| `/unignoreunit`| Flag that unit again: `/unignoreunit <name or id> <unit>`       |
+| `/ignorelist`  | Units currently ignored, and when each mute lapses             |
 | `/cancel`      | Abort the `/addcompany` or `/seteld` wizard                    |
 
 ## Multi-company

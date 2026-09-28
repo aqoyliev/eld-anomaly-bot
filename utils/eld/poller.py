@@ -105,6 +105,24 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
                     company.name)
         return
 
+    # Units an admin muted with /ignoreunit — a known false anomaly, typically a
+    # truck whose Motive device was physically moved into another truck: the old
+    # number keeps "moving" while that truck's own ELD is legitimately offline.
+    # Dropped before detection, so no event opens and no alert goes out.
+    ignored = await store.ignored_unit_keys(company.id)
+    if ignored:
+        skipped = sorted({v.unit_number for v in moving
+                          if store.ignore_key(v.unit_number) in ignored})
+        if skipped:
+            moving = [v for v in moving
+                      if store.ignore_key(v.unit_number) not in ignored]
+            logger.info("Poll[%s]: %d moving unit(s) on the ignore list "
+                        "(skipped): %s", company.name, len(skipped), skipped)
+        if not moving:
+            logger.info("Poll[%s]: every moving vehicle is on the ignore list.",
+                        company.name)
+            return
+
     # 2. Look those vehicles up on the ELD side by unit number to read their
     #    last report time (a stale report => ELD disconnected/offline). Dedupe
     #    the unit numbers — two trucks can share one, but each system holds a
