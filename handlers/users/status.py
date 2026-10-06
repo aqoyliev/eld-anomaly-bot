@@ -1,9 +1,12 @@
+from html import escape
+
 from aiogram import types
 from aiogram.dispatcher.filters import Command
 
 from filters.is_admin import is_admin_or_viewer
 from loader import dp
 from utils.eld import store
+from utils.misc.long_message import answer_long
 from utils.eld.formatting import format_status_line
 
 
@@ -22,7 +25,7 @@ async def _company_blocks(companies):
         events = _moving(await store.get_active_events(c.id))
         if not events:
             continue
-        block = [f"<b>{c.name} — moving & disconnected ({len(events)}):</b>"]
+        block = [f"<b>{escape(c.name)} — moving &amp; disconnected ({len(events)}):</b>"]
         block += [format_status_line(e) for e in events]
         blocks.append("\n".join(block))
     return blocks
@@ -39,7 +42,7 @@ async def show_status(message: types.Message):
             return
         lines = [f"<b>Moving units disconnected ({len(events)}):</b>", ""]
         lines += [format_status_line(e) for e in events]
-        await message.answer("\n".join(lines))
+        await answer_long(message, lines)
         return
 
     if companies:
@@ -48,7 +51,7 @@ async def show_status(message: types.Message):
         if not blocks:
             await message.answer("✅ No moving units currently disconnected.")
             return
-        await message.answer("\n\n".join(blocks))
+        await answer_long(message, blocks, sep="\n\n")
         return
 
     if is_admin_or_viewer(message.from_user):
@@ -59,7 +62,7 @@ async def show_status(message: types.Message):
                 "✅ No moving units currently disconnected (any company)."
             )
             return
-        await message.answer("\n\n".join(blocks))
+        await answer_long(message, blocks, sep="\n\n")
         return
 
     await message.answer("This chat isn't linked to a company yet.")

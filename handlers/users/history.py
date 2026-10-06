@@ -1,9 +1,12 @@
+from html import escape
+
 from aiogram import types
 from aiogram.dispatcher.filters import Command
 
 from filters.is_admin import is_admin_or_viewer
 from loader import dp
 from utils.eld import store
+from utils.misc.long_message import answer_long
 from utils.eld.formatting import format_history_line
 
 HISTORY_LIMIT = 20
@@ -16,7 +19,7 @@ async def _company_blocks(companies):
         events = await store.get_recent_events(c.id, limit=HISTORY_LIMIT)
         if not events:
             continue
-        block = [f"<b>{c.name} — recent events (last {len(events)}):</b>"]
+        block = [f"<b>{escape(c.name)} — recent events (last {len(events)}):</b>"]
         block += [format_history_line(e) for e in events]
         blocks.append("\n".join(block))
     return blocks
@@ -33,7 +36,7 @@ async def show_history(message: types.Message):
             return
         lines = [f"<b>Recent disconnection events (last {len(events)}):</b>", ""]
         lines += [format_history_line(e) for e in events]
-        await message.answer("\n".join(lines))
+        await answer_long(message, lines)
         return
 
     if companies:
@@ -42,7 +45,7 @@ async def show_history(message: types.Message):
         if not blocks:
             await message.answer("No disconnection events recorded yet.")
             return
-        await message.answer("\n\n".join(blocks))
+        await answer_long(message, blocks, sep="\n\n")
         return
 
     if is_admin_or_viewer(message.from_user):
@@ -51,7 +54,7 @@ async def show_history(message: types.Message):
         if not blocks:
             await message.answer("No disconnection events recorded yet (any company).")
             return
-        await message.answer("\n\n".join(blocks))
+        await answer_long(message, blocks, sep="\n\n")
         return
 
     await message.answer("This chat isn't linked to a company yet.")
