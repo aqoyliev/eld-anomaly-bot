@@ -40,7 +40,6 @@ CREATE TABLE IF NOT EXISTS companies (
     evo_api_key         TEXT,
     evo_provider_token  TEXT,
     evo_usdot           TEXT,
-    vitality_company_key TEXT,
     alert_chat_id       TEXT,
     active              INTEGER          NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -92,7 +91,6 @@ CREATE TABLE IF NOT EXISTS companies (
     evo_api_key         TEXT,
     evo_provider_token  TEXT,
     evo_usdot           TEXT,
-    vitality_company_key TEXT,
     alert_chat_id       TEXT,
     active              INTEGER NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -162,7 +160,7 @@ _MIGRATIONS = [
     # (every pre-Samsara event came from GoMotive).
     ("provider", "TEXT"),
     # Which ELD system's stale record flagged the unit
-    # ("quantum"/"evo"/"vitality"). NULL = quantum (every pre-EVO event came
+    # ("quantum"/"evo"). NULL = quantum (every pre-EVO event came
     # from Quantum).
     ("eld_provider", "TEXT"),
 ]
@@ -177,9 +175,6 @@ _COMPANY_MIGRATIONS = [
     ("evo_api_key", "TEXT"),
     ("evo_provider_token", "TEXT"),
     ("evo_usdot", "TEXT"),
-    # Third ELD-side provider: Vitality ELD (the carrier's X-API-Company-Key;
-    # the bot-wide provider key is config.VITALITY_PROVIDER_KEY).
-    ("vitality_company_key", "TEXT"),
 ]
 
 # Migrations on a pre-existing `companies` table (CREATE TABLE above only covers
@@ -194,7 +189,10 @@ _COMPANY_RENAMES = [
 # config.QUANTUM_BASE_URL. Drop the column under either name if a pre-existing DB
 # still has it (values were NULL or the old GreenLight default — no real loss).
 # DROP COLUMN needs SQLite >= 3.35; on Postgres it's DROP COLUMN IF EXISTS.
-_COMPANY_DROPS = ["greenlight_base_url", "quantum_base_url"]
+# `vitality_company_key` goes too: this branch has no Vitality provider, and
+# a leftover column would break Company(**row) on SELECT *.
+_COMPANY_DROPS = ["greenlight_base_url", "quantum_base_url",
+                  "vitality_company_key"]
 
 
 @dataclass
@@ -210,7 +208,6 @@ class Company:
     alert_chat_id: Optional[str] = None
     active: int = 1
     created_at: Optional[str] = None
-    vitality_company_key: Optional[str] = None
 
     @property
     def evo_configured(self) -> bool:
@@ -219,16 +216,9 @@ class Company:
         return bool(self.evo_api_key and self.evo_provider_token and self.evo_usdot)
 
     @property
-    def vitality_configured(self) -> bool:
-        """Vitality needs the carrier's company key plus the bot-wide
-        VITALITY_PROVIDER_KEY."""
-        return bool(self.vitality_company_key and config.VITALITY_PROVIDER_KEY)
-
-    @property
     def has_eld(self) -> bool:
         """At least one ELD-side system is usable for this company."""
-        return bool(self.quantum_token or self.evo_configured
-                    or self.vitality_configured)
+        return bool(self.quantum_token or self.evo_configured)
 
 
 @dataclass
@@ -549,7 +539,6 @@ async def add_company(
     evo_api_key: Optional[str] = None,
     evo_provider_token: Optional[str] = None,
     evo_usdot: Optional[str] = None,
-    vitality_company_key: Optional[str] = None,
 ) -> Company:
     """Create a company and return it. ``alert_chat_id`` is left NULL — bind it to
     a Telegram group with :func:`bind_company_chat` before it will be polled."""
@@ -557,10 +546,10 @@ async def add_company(
     company_id = await _insert_returning_id(
         "INSERT INTO companies (name, gomotive_token, samsara_token, "
         "quantum_token, evo_api_key, evo_provider_token, evo_usdot, "
-        "vitality_company_key, created_at) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "created_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         name, gomotive_token, samsara_token, quantum_token,
-        evo_api_key, evo_provider_token, evo_usdot, vitality_company_key, now,
+        evo_api_key, evo_provider_token, evo_usdot, now,
     )
     row = await _fetchrow("SELECT * FROM companies WHERE id = $1", company_id)
     return _row_to_company(row)
@@ -582,7 +571,6 @@ async def bind_company_chat(company_id: int, chat_id) -> None:
 # interpolate.
 ELD_CREDENTIAL_COLUMNS = {
     "quantum": "quantum_token",
-    "vitality": "vitality_company_key",
 }
 
 

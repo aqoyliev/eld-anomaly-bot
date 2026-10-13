@@ -7,7 +7,7 @@ from loader import dp
 USER_HELP = (
     "<b>ELD Disconnection Bot</b>\n"
     "I watch your fleet and flag any unit that's moving on GoMotive/Samsara "
-    "while its ELD (Quantum, EVO or Vitality) has gone silent (a likely "
+    "while its ELD (Quantum or EVO) has gone silent (a likely "
     "disconnection). "
     "Alerts land in this group automatically.\n\n"
     "<b>Commands</b>\n"
@@ -20,7 +20,7 @@ USER_HELP = (
 ADMIN_HELP = (
     "<b>ELD Disconnection Bot — admin help</b>\n"
     "I watch each company's fleet and flag any unit moving on its movement "
-    "provider (GoMotive or Samsara) while its ELD (Quantum, EVO or Vitality) has gone "
+    "provider (GoMotive or Samsara) while its ELD (Quantum or EVO) has gone "
     "silent. Each company has its own tokens and alert group.\n\n"
     "<b>Everyone (in a company's group)</b>\n"
     "/status — vehicles currently flagged for that group's company\n"
@@ -35,7 +35,7 @@ ADMIN_HELP = (
     "/companies — list companies, their state, and masked tokens\n"
     "/activate &lt;name|id&gt; — resume polling a company\n"
     "/deactivate &lt;name|id&gt; — stop polling a company (history kept)\n"
-    "/seteld &lt;name|id&gt; &lt;quantum|vitality&gt; — set or remove that ELD credential\n"
+    "/seteld &lt;name|id&gt; quantum — set or remove the Quantum ELD token\n"
     "/ignoreunit &lt;name|id&gt; &lt;unit&gt; [days] — stop flagging one unit "
     "(default 30 days, 0 = no expiry); for a known false anomaly, e.g. a truck "
     "whose Motive device now runs in a different truck\n"
