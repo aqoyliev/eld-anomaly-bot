@@ -35,7 +35,7 @@ ADMIN_HELP = (
     "/companies — list companies, their state, and masked tokens\n"
     "/activate &lt;name|id&gt; — resume polling a company\n"
     "/deactivate &lt;name|id&gt; — stop polling a company (history kept)\n"
-    "/seteld &lt;name|id&gt; quantum — set or remove the Quantum ELD token\n"
+    "/seteld &lt;name|id&gt; evo — set or remove the EVO ELD credentials\n"
     "/ignoreunit &lt;name|id&gt; &lt;unit&gt; [days] — stop flagging one unit "
     "(default 30 days, 0 = no expiry); for a known false anomaly, e.g. a truck "
     "whose Motive device now runs in a different truck\n"

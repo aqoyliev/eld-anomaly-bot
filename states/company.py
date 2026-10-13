@@ -19,5 +19,11 @@ class AddCompany(StatesGroup):
 
 
 class SetEld(StatesGroup):
-    """/seteld: waits for the new credential (auto-deleted) or "remove"."""
-    value = State()
+    """/seteld: walks through one ELD system's credentials on an existing
+    company, each message auto-deleted, or "remove" at the first step to clear
+    them. EVO needs three values (api key, provider token, USDOT number), and
+    they are stored together at the end — a half-written set counts as no EVO
+    at all."""
+    evo_api_key = State()
+    evo_provider_token = State()
+    evo_usdot = State()

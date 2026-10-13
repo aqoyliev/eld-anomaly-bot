@@ -21,7 +21,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from data import config
 from .quantumeld import quantum_key
@@ -567,20 +567,30 @@ async def bind_company_chat(company_id: int, chat_id) -> None:
 
 
 # Per-company ELD credentials editable after creation (/seteld). Maps the
-# /seteld system name to its column; a whitelist, so the column name is safe to
-# interpolate.
+# /seteld system name to the column(s) it writes; a whitelist, so the column
+# names are safe to interpolate.
 ELD_CREDENTIAL_COLUMNS = {
-    "quantum": "quantum_token",
+    "evo": ("evo_api_key", "evo_provider_token", "evo_usdot"),
 }
 
 
-async def set_eld_credential(
-    company_id: int, system: str, value: Optional[str]
+async def set_eld_credentials(
+    company_id: int, system: str, values: Sequence[Optional[str]]
 ) -> None:
-    """Set (or clear, with ``value=None``) a company's ELD credential."""
-    column = ELD_CREDENTIAL_COLUMNS[system]
+    """Set (or clear, with all-None ``values``) one ELD system's credentials.
+
+    Written in a single UPDATE: EVO needs three values and a partial set counts
+    as not configured (see Company.evo_configured), so writing them one at a
+    time could leave the company with no usable ELD system between calls."""
+    columns = ELD_CREDENTIAL_COLUMNS[system]
+    if len(values) != len(columns):
+        raise ValueError(f"{system} takes {len(columns)} value(s), got {len(values)}")
+    assignments = ", ".join(
+        f"{column} = ${i}" for i, column in enumerate(columns, start=1)
+    )
     await _execute(
-        f"UPDATE companies SET {column} = $1 WHERE id = $2", value, company_id
+        f"UPDATE companies SET {assignments} WHERE id = ${len(columns) + 1}",
+        *values, company_id,
     )
 
 

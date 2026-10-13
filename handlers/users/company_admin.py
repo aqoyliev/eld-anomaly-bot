@@ -8,7 +8,7 @@ Commands (restricted to config.ADMINS via the IsAdmin filter):
     /companies    list all companies (tokens masked)
     /activate     re-activate a company (start polling it)
     /deactivate   soft-delete a company (stop polling, keep history)
-    /seteld       set or remove a company's Quantum ELD token
+    /seteld       set or remove a company's EVO ELD credentials
     /cancel       abort the /addcompany or /seteld wizard
 """
 
@@ -289,10 +289,7 @@ async def _create_company(message: types.Message, state: FSMContext, *,
         evo_provider_token=evo_provider_token,
         evo_usdot=evo_usdot,
     )
-    evo_label = (
-        f"{_mask(company.evo_api_key)} (USDOT {escape(company.evo_usdot)})"
-        if company.evo_configured else "(none)"
-    )
+    evo_label = _evo_label(company)
     await message.answer(
         f"✅ Created company <b>{escape(company.name)}</b> (id {company.id}).\n"
         f"  GoMotive: <code>{_mask(company.gomotive_token)}</code>\n"
@@ -434,7 +431,15 @@ async def _set_active(message: types.Message, value: int):
 
 # --- /seteld -----------------------------------------------------------------
 
-_ELD_NAMES = {"quantum": "Quantum ELD token"}
+_ELD_NAMES = {"evo": "EVO ELD credentials"}
+
+
+def _evo_label(company) -> str:
+    """What EVO looks like right now. The USDOT is public (it sits in the EVO
+    API URL), so it identifies the setup better than a second masked token."""
+    if not company.evo_configured:
+        return "(none)"
+    return f"{_mask(company.evo_api_key)} (USDOT {escape(company.evo_usdot)})"
 
 
 @dp.message_handler(IsAdmin(), commands=["seteld"], state="*")
@@ -443,9 +448,10 @@ async def set_eld(message: types.Message, state: FSMContext):
     systems = "|".join(store.ELD_CREDENTIAL_COLUMNS)
     if len(args) < 2 or args[-1].lower() not in store.ELD_CREDENTIAL_COLUMNS:
         await message.answer(
-            f"Usage: <code>/seteld &lt;company name or id&gt; &lt;{systems}&gt;</code>\n"
-            "I'll then ask for the new value (best in a DM — the message is "
-            "auto-deleted), or <code>remove</code> to clear it."
+            f"Usage: <code>/seteld &lt;company name or id&gt; {systems}</code>\n"
+            "I'll then walk through the values (best in a DM — each message "
+            "carrying a secret is auto-deleted), or send <code>remove</code> "
+            "at the first step to clear them."
         )
         return
     system = args[-1].lower()
@@ -455,45 +461,90 @@ async def set_eld(message: types.Message, state: FSMContext):
         await message.answer(f"No company found for <b>{escape(target)}</b>.")
         return
     await state.finish()
-    await state.set_state(SetEld.value)
+    await state.set_state(SetEld.evo_api_key)
     await state.update_data(company_id=company.id, system=system)
-    current = getattr(company, store.ELD_CREDENTIAL_COLUMNS[system])
     await message.answer(
         f"<b>{escape(company.name)}</b> — {_ELD_NAMES[system]} "
-        f"(now <code>{_mask(current)}</code>).\n\n"
-        "Send the new value, or <code>remove</code> to clear it. "
-        "/cancel to abort."
+        f"(now <code>{_evo_label(company)}</code>).\n\n"
+        "Send the new <b>EVO api key</b>, or <code>remove</code> to clear all "
+        "three values. /cancel to abort.\n"
+        "<i>I'll delete the message carrying the key.</i>"
     )
 
 
-@dp.message_handler(state=SetEld.value)
-async def set_eld_value(message: types.Message, state: FSMContext):
+@dp.message_handler(state=SetEld.evo_api_key)
+async def set_eld_evo_api_key(message: types.Message, state: FSMContext):
     if await _intercept_command(message):
         return
-    data = await state.get_data()
-    system = data["system"]
     if (message.text or "").strip().lower() == "remove":
-        value = None
-    else:
-        value = await _consume_secret(message)
-        if not value:
-            await message.answer("Empty value — send it, <code>remove</code>, "
-                                 "or /cancel.")
-            return
+        await _save_eld(message, state, None, None, None)
+        return
+    value = await _consume_secret(message)
+    if not value:
+        await message.answer("Empty value — send the EVO api key, "
+                             "<code>remove</code>, or /cancel.")
+        return
+    await state.update_data(evo_api_key=value)
+    await state.set_state(SetEld.evo_provider_token)
+    await message.answer(
+        "EVO api key received ✅\n\nNow send the <b>EVO provider token</b>.\n"
+        "<i>I'll delete that message too.</i>"
+    )
+
+
+@dp.message_handler(state=SetEld.evo_provider_token)
+async def set_eld_evo_provider_token(message: types.Message, state: FSMContext):
+    if await _intercept_command(message):
+        return
+    value = await _consume_secret(message)
+    if not value:
+        await message.answer("Empty value — send the EVO provider token, "
+                             "or /cancel.")
+        return
+    await state.update_data(evo_provider_token=value)
+    await state.set_state(SetEld.evo_usdot)
+    await message.answer(
+        "EVO provider token received ✅\n\nFinally, send the company's "
+        "<b>USDOT number</b> (digits only — it goes in the EVO API URL, "
+        "so it isn't a secret)."
+    )
+
+
+@dp.message_handler(state=SetEld.evo_usdot)
+async def set_eld_evo_usdot(message: types.Message, state: FSMContext):
+    if await _intercept_command(message):
+        return
+    usdot = (message.text or "").strip()
+    if not usdot.isdigit():
+        await message.answer("A USDOT number is digits only — try again, or /cancel.")
+        return
+    data = await state.get_data()
+    await _save_eld(message, state, data["evo_api_key"],
+                    data["evo_provider_token"], usdot)
+
+
+async def _save_eld(message: types.Message, state: FSMContext,
+                    api_key, provider_token, usdot):
+    """Store the collected credentials (or clear them, with all-None) in one
+    write, so EVO is never left half-configured — which would count as no EVO
+    and could silently stop the company being polled."""
+    data = await state.get_data()
     await state.finish()
     company = await store.get_company(data["company_id"])
     if company is None:
         await message.answer("That company no longer exists.")
         return
-    await store.set_eld_credential(company.id, system, value)
+    await store.set_eld_credentials(
+        company.id, data["system"], (api_key, provider_token, usdot)
+    )
     company = await store.get_company(company.id)
-    notes = []
+    note = ""
     if not company.has_eld:
-        notes.append("This company now has no usable ELD system and won't be "
-                     "polled.")
-    note = "".join(f"\n⚠️ {n}" for n in notes)
-    verb = "Removed" if value is None else "Saved"
+        note = ("\n⚠️ This company now has no usable ELD system and won't be "
+                "polled.")
+    verb = "Removed" if api_key is None else "Saved"
     await message.answer(
-        f"✅ {verb} {_ELD_NAMES[system]} for <b>{escape(company.name)}</b>. "
+        f"✅ {verb} {_ELD_NAMES[data['system']]} for "
+        f"<b>{escape(company.name)}</b> (now <code>{_evo_label(company)}</code>). "
         f"Takes effect from the next poll cycle.{note}"
     )
