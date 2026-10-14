@@ -70,7 +70,7 @@ def _eld_label(event: AnomalyEvent) -> str:
     return _ELD_LABELS.get(event.eld_provider, "Quantum ELD")
 
 
-_ELD_LABELS = {"evo": "EVO ELD", "vitality": "Vitality ELD"}
+_ELD_LABELS = {"evo": "EVO ELD", "vitality": "Vitality ELD", "zero": "Zero ELD"}
 
 
 def _provider_badge(event: AnomalyEvent) -> str:

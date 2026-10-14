@@ -8,7 +8,7 @@ Commands (restricted to config.ADMINS via the IsAdmin filter):
     /companies    list all companies (tokens masked)
     /activate     re-activate a company (start polling it)
     /deactivate   soft-delete a company (stop polling, keep history)
-    /seteld       set or remove a company's Quantum token / Vitality key
+    /seteld       set or remove a company's Quantum token / Vitality or Zero key
     /cancel       abort the /addcompany or /seteld wizard
 """
 
@@ -155,7 +155,7 @@ async def add_gomotive(message: types.Message, state: FSMContext):
 
 _QUANTUM_PROMPT = (
     "Now send the <b>Quantum ELD API token</b>, or <code>skip</code> if this "
-    "company's ELDs report to EVO or Vitality instead.\n"
+    "company's ELDs report to EVO, Vitality or Zero instead.\n"
     "<i>I'll delete that message too.</i>"
 )
 
@@ -267,16 +267,10 @@ async def add_evo_usdot(message: types.Message, state: FSMContext):
 
 
 async def _ask_vitality(message: types.Message, state: FSMContext, lead: str):
-    data = await state.get_data()
-    required = not (data.get("quantum_token") or data.get("evo_api_key"))
-    tail = (
-        "(required — no other ELD system was given; a company needs at least "
-        "one)" if required
-        else "or <code>skip</code> if this company doesn't use Vitality"
-    )
     await state.set_state(AddCompany.vitality_company_key)
     await message.answer(
-        f"{lead}\n\nNow send the <b>Vitality ELD company key</b> {tail}.\n"
+        f"{lead}\n\nNow send the <b>Vitality ELD company key</b>, or "
+        "<code>skip</code> if this company doesn't use Vitality.\n"
         "<i>I'll delete that message too.</i>"
     )
 
@@ -286,21 +280,58 @@ async def add_vitality_key(message: types.Message, state: FSMContext):
     if await _intercept_command(message):
         return
     if _is_skip(message):
-        data = await state.get_data()
-        if not (data.get("quantum_token") or data.get("evo_api_key")):
-            await message.answer(
-                "No other ELD system was given, so the <b>Vitality company key "
-                "is required</b>. Send it, or /cancel."
-            )
-            return
-        await _create_company(message, state, vitality_company_key=None)
+        await state.update_data(vitality_company_key=None)
+        await _ask_zero(message, state, "Vitality skipped.")
         return
     token = await _consume_secret(message)
     if not token:
         await message.answer("Empty value — send the Vitality company key, "
                              "<code>skip</code>, or /cancel.")
         return
-    await _create_company(message, state, vitality_company_key=token)
+    await state.update_data(vitality_company_key=token)
+    await _ask_zero(message, state, "Vitality company key received ✅")
+
+
+def _zero_required(data: dict) -> bool:
+    """Zero is the last ELD step, so it's mandatory when every other ELD
+    system was skipped (a company needs at least one)."""
+    return not (data.get("quantum_token") or data.get("evo_api_key")
+                or data.get("vitality_company_key"))
+
+
+async def _ask_zero(message: types.Message, state: FSMContext, lead: str):
+    data = await state.get_data()
+    tail = (
+        "(required — no other ELD system was given; a company needs at least "
+        "one)" if _zero_required(data)
+        else "or <code>skip</code> if this company doesn't use Zero"
+    )
+    await state.set_state(AddCompany.zero_company_key)
+    await message.answer(
+        f"{lead}\n\nFinally, send the <b>Zero ELD company key</b> {tail}.\n"
+        "<i>I'll delete that message too.</i>"
+    )
+
+
+@dp.message_handler(state=AddCompany.zero_company_key)
+async def add_zero_key(message: types.Message, state: FSMContext):
+    if await _intercept_command(message):
+        return
+    if _is_skip(message):
+        if _zero_required(await state.get_data()):
+            await message.answer(
+                "No other ELD system was given, so the <b>Zero company key "
+                "is required</b>. Send it, or /cancel."
+            )
+            return
+        await _create_company(message, state, zero_company_key=None)
+        return
+    token = await _consume_secret(message)
+    if not token:
+        await message.answer("Empty value — send the Zero company key, "
+                             "<code>skip</code>, or /cancel.")
+        return
+    await _create_company(message, state, zero_company_key=token)
 
 
 def _vitality_label(company) -> str:
@@ -311,8 +342,16 @@ def _vitality_label(company) -> str:
     return _mask(company.vitality_company_key)
 
 
+def _zero_label(company) -> str:
+    if not company.zero_company_key:
+        return "(none)"
+    if not config.ZERO_PROVIDER_KEY:
+        return f"{_mask(company.zero_company_key)} — ZERO_PROVIDER_KEY unset!"
+    return _mask(company.zero_company_key)
+
+
 async def _create_company(message: types.Message, state: FSMContext, *,
-                          vitality_company_key):
+                          zero_company_key):
     data = await state.get_data()
     await state.finish()
     evo_api_key = data.get("evo_api_key")
@@ -327,7 +366,8 @@ async def _create_company(message: types.Message, state: FSMContext, *,
         evo_api_key=evo_api_key,
         evo_provider_token=evo_provider_token,
         evo_usdot=evo_usdot,
-        vitality_company_key=vitality_company_key,
+        vitality_company_key=data.get("vitality_company_key"),
+        zero_company_key=zero_company_key,
     )
     evo_label = (
         f"{_mask(company.evo_api_key)} (USDOT {escape(company.evo_usdot)})"
@@ -339,7 +379,8 @@ async def _create_company(message: types.Message, state: FSMContext, *,
         f"  Samsara: <code>{_mask(company.samsara_token)}</code>\n"
         f"  Quantum: <code>{_mask(company.quantum_token)}</code>\n"
         f"  EVO: <code>{evo_label}</code>\n"
-        f"  Vitality: <code>{_vitality_label(company)}</code>\n\n"
+        f"  Vitality: <code>{_vitality_label(company)}</code>\n"
+        f"  Zero: <code>{_zero_label(company)}</code>\n\n"
         "It won't be polled until an alert chat is linked. Go to its alert group "
         f"and send:\n<code>/bindhere {escape(company.name)}</code>"
     )
@@ -440,7 +481,8 @@ async def list_companies(message: types.Message):
             f"Samsara <code>{_mask(c.samsara_token)}</code> · "
             f"Quantum <code>{_mask(c.quantum_token)}</code> · "
             f"EVO <code>{evo}</code> · "
-            f"Vitality <code>{_vitality_label(c)}</code> · chat {chat}"
+            f"Vitality <code>{_vitality_label(c)}</code> · "
+            f"Zero <code>{_zero_label(c)}</code> · chat {chat}"
         )
     await message.answer("\n".join(lines))
 
@@ -476,7 +518,11 @@ async def _set_active(message: types.Message, value: int):
 
 # --- /seteld -----------------------------------------------------------------
 
-_ELD_NAMES = {"quantum": "Quantum ELD token", "vitality": "Vitality ELD company key"}
+_ELD_NAMES = {
+    "quantum": "Quantum ELD token",
+    "vitality": "Vitality ELD company key",
+    "zero": "Zero ELD company key",
+}
 
 
 @dp.message_handler(IsAdmin(), commands=["seteld"], state="*")
@@ -533,6 +579,9 @@ async def set_eld_value(message: types.Message, state: FSMContext):
     if system == "vitality" and value and not config.VITALITY_PROVIDER_KEY:
         notes.append("VITALITY_PROVIDER_KEY is not set on the server, so "
                      "Vitality won't be polled until it is.")
+    if system == "zero" and value and not config.ZERO_PROVIDER_KEY:
+        notes.append("Neither ZERO_PROVIDER_KEY nor VITALITY_PROVIDER_KEY is "
+                     "set on the server, so Zero won't be polled until one is.")
     if not company.has_eld:
         notes.append("This company now has no usable ELD system and won't be "
                      "polled.")

@@ -15,6 +15,9 @@ cycle costs one or two requests. Every request needs two headers:
 
 The status feed carries only a ``driver_id``; names come from ``/v2/drivers``
 and are cached for an hour.
+
+Zero ELD runs on the same DriveHOS platform, so this client serves it too; the
+``brand`` argument only changes the name in errors and logs.
 """
 
 import logging
@@ -66,7 +69,7 @@ def _parse_time(value: Optional[str]) -> Optional[datetime]:
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
-        logger.warning("Vitality: could not parse time %r", value)
+        logger.warning("DriveHOS: could not parse time %r", value)
         return None
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
@@ -107,7 +110,8 @@ def _headers(company_key: str, provider_key: str) -> dict:
 
 
 async def _fetch_pages(
-    session: aiohttp.ClientSession, url: str, headers: dict, page_size: int
+    session: aiohttp.ClientSession, url: str, headers: dict, page_size: int,
+    brand: str,
 ) -> List[dict]:
     """Collect ``data`` across every page of a page/limit endpoint."""
     items: List[dict] = []
@@ -118,10 +122,10 @@ async def _fetch_pages(
             if resp.status != 200:
                 # Truncate the body — error pages can be full HTML.
                 body = " ".join((await resp.text()).split())[:160]
-                raise RuntimeError(f"Vitality {url} HTTP {resp.status}: {body}")
+                raise RuntimeError(f"{brand} {url} HTTP {resp.status}: {body}")
             data = await resp.json(content_type=None)
         if data.get("description") != "success":
-            raise RuntimeError(f"Vitality {url} error: {data.get('description')}")
+            raise RuntimeError(f"{brand} {url} error: {data.get('description')}")
         items.extend(data.get("data") or [])
         if page >= (data.get("total_pages") or 1):
             break
@@ -130,7 +134,8 @@ async def _fetch_pages(
 
 
 async def _driver_names(
-    session: aiohttp.ClientSession, base_url: str, headers: dict, company_key: str
+    session: aiohttp.ClientSession, base_url: str, headers: dict,
+    company_key: str, brand: str,
 ) -> Dict[str, str]:
     """{driver_id: "FIRST LAST"}, cached for an hour. A roster failure is not
     fatal — alerts just go out without a driver name."""
@@ -139,10 +144,10 @@ async def _driver_names(
         return cached[1]
     try:
         rows = await _fetch_pages(
-            session, f"{base_url}/v2/drivers", headers, _DRIVER_PAGE_SIZE
+            session, f"{base_url}/v2/drivers", headers, _DRIVER_PAGE_SIZE, brand
         )
     except Exception:
-        logger.warning("Vitality: driver roster lookup failed", exc_info=True)
+        logger.warning("%s: driver roster lookup failed", brand, exc_info=True)
         return cached[1] if cached else {}
     names = {}
     for r in rows:
@@ -155,11 +160,13 @@ async def _driver_names(
 
 
 async def fetch_units(
-    company_key: str, provider_key: str, base_url: str
+    company_key: str, provider_key: str, base_url: str, *,
+    brand: str = "Vitality",
 ) -> Dict[str, VitalityVehicle]:
-    """Fetch the full Vitality fleet snapshot for a carrier, keyed by NORMALIZED
-    unit number (:func:`quantum_key`, same as EVO). Each unit is also indexed
-    without leading zeros so "0942" and "942" meet; look up with :func:`lookup`.
+    """Fetch the full DriveHOS fleet snapshot for a carrier (Vitality or Zero
+    ELD — ``brand`` names it in errors), keyed by NORMALIZED unit number
+    (:func:`quantum_key`, same as EVO). Each unit is also indexed without
+    leading zeros so "0942" and "942" meet; look up with :func:`lookup`.
 
     Raises on HTTP/auth errors so a credential problem surfaces instead of
     silently yielding zero anomalies."""
@@ -169,10 +176,10 @@ async def fetch_units(
     async with aiohttp.ClientSession(timeout=timeout) as session:
         raw_units = await _fetch_pages(
             session, f"{base_url}/v2/latest-vehicle-status", headers,
-            _VEHICLE_PAGE_SIZE,
+            _VEHICLE_PAGE_SIZE, brand,
         )
         drivers = (
-            await _driver_names(session, base_url, headers, company_key)
+            await _driver_names(session, base_url, headers, company_key, brand)
             if any(r.get("driver_id") for r in raw_units) else {}
         )
 
