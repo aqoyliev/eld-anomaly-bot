@@ -53,6 +53,11 @@ class VitalityVehicle:
     longitude: Optional[float] = None
     driver: Optional[str] = None
     location: Optional[str] = None  # human-readable, e.g. "1.0mi E of Carney, MT"
+    # Extra status-feed fields, used only by observer.py to spot an ELD that
+    # still pings its position but records no engine data.
+    speed: Optional[float] = None
+    status: Optional[str] = None  # IN_MOTION / STATIONARY / OFFLINE
+    odometer: Optional[float] = None
 
     @property
     def coordinates_label(self) -> str:
@@ -98,6 +103,9 @@ def _parse_unit(raw: dict, drivers: Dict[str, str]) -> Optional[VitalityVehicle]
         longitude=lon,
         driver=drivers.get(raw.get("driver_id") or ""),
         location=raw.get("calc_location") or None,
+        speed=_parse_coord(raw.get("speed")),
+        status=(str(raw["status"]).upper() if raw.get("status") else None),
+        odometer=_parse_coord(raw.get("odometer")),
     )
 
 

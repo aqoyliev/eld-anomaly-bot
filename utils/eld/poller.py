@@ -6,7 +6,7 @@ import logging
 from aiogram import Bot
 
 from data import config
-from . import evoeld, gomotive, quantumeld, samsara, store, vitalityeld
+from . import evoeld, gomotive, observer, quantumeld, samsara, store, vitalityeld
 from .detector import find_anomalies, vins_conflict
 from .quantumeld import quantum_key
 from .formatting import format_alert
@@ -195,6 +195,17 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
         vitality_lookup=vitality_lookup, zero_lookup=zero_lookup,
         threshold_seconds=config.ELD_STALE_THRESHOLD,
     )
+    # Observation only (never alerts): log units whose Vitality/Zero record is
+    # fresh yet disagrees with the movement provider — an ELD that pings its
+    # position but records no engine data.
+    try:
+        observer.observe(
+            company.id, company.name, moving,
+            vitality_lookup=vitality_lookup, zero_lookup=zero_lookup,
+            threshold_seconds=config.ELD_STALE_THRESHOLD,
+        )
+    except Exception:
+        logger.exception("Poll[%s]: ELD mismatch observer failed.", company.name)
     # Units a provider reports moving but no ELD system has a record for.
     # Normally these are units outside our Quantum/EVO/Vitality/Zero accounts and
     # are safely ignored; log them so a real fleet vehicle that ever lands here
