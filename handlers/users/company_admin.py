@@ -32,10 +32,13 @@ def _mask(token):
 
 
 async def _resolve(arg: str):
-    """Resolve a company by numeric id or by name."""
+    """Resolve a company by numeric id or by name. A digits-only argument is
+    tried as an id first, then as a name — a company can be called "707"."""
     arg = arg.strip()
     if arg.isdigit():
-        return await store.get_company(int(arg))
+        company = await store.get_company(int(arg))
+        if company is not None:
+            return company
     return await store.get_company_by_name(arg)
 
 
