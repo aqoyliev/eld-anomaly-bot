@@ -31,8 +31,8 @@ async def _send_alert(
 
 async def poll_once(bot: Bot, company: store.Company) -> None:
     if not company.has_eld:
-        logger.warning("Company %s has no ELD-side credentials (Quantum, EVO or "
-                       "Vitality); skipping poll cycle.", company.name)
+        logger.warning("Company %s has no ELD-side credentials (Quantum, EVO, "
+                       "Vitality or Zero); skipping poll cycle.", company.name)
         return
 
     if not company.gomotive_token and not company.samsara_token:
@@ -173,19 +173,36 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
                 "Vitality this cycle.", company.name,
             )
 
+    zero_lookup: dict = {}
+    if company.zero_configured:
+        try:
+            # Zero ELD is on the same DriveHOS API as Vitality.
+            snapshot = await vitalityeld.fetch_units(
+                company.zero_company_key, config.ZERO_PROVIDER_KEY,
+                config.ZERO_BASE_URL, brand="Zero",
+            )
+            zero_lookup = {
+                u: vitalityeld.lookup(snapshot, u) for u in unit_numbers
+            }
+        except Exception:
+            logger.exception(
+                "Poll[%s]: Zero fetch failed — units treated as not in Zero "
+                "this cycle.", company.name,
+            )
+
     anomalies = find_anomalies(
         moving, quantum_lookup, evo_lookup=evo_lookup,
-        vitality_lookup=vitality_lookup,
+        vitality_lookup=vitality_lookup, zero_lookup=zero_lookup,
         threshold_seconds=config.ELD_STALE_THRESHOLD,
     )
     # Units a provider reports moving but no ELD system has a record for.
-    # Normally these are units outside our Quantum/EVO/Vitality accounts and are
-    # safely ignored; log them so a real fleet vehicle that ever lands here
+    # Normally these are units outside our Quantum/EVO/Vitality/Zero accounts and
+    # are safely ignored; log them so a real fleet vehicle that ever lands here
     # (i.e. a disconnection we'd otherwise miss) is visible.
     not_in_eld = [
         u for u in unit_numbers
         if quantum_lookup.get(u) is None and evo_lookup.get(u) is None
-        and vitality_lookup.get(u) is None
+        and vitality_lookup.get(u) is None and zero_lookup.get(u) is None
     ]
     found_in_eld = len(unit_numbers) - len(not_in_eld)
     logger.info(

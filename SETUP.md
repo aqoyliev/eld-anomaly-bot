@@ -47,6 +47,7 @@ Then edit `.env`:
 | `ADMINS`                 | Your numeric Telegram user ID ([@userinfobot](https://t.me/userinfobot)) |
 | `QUANTUM_TOKEN`          | Carrier-issued Quantum ELD external-API token |
 | `VITALITY_PROVIDER_KEY`  | Only if a company uses Vitality ELD: the DriveHOS provider key (office@drivehos.org). The carrier's own key is entered in-bot with `/seteld <company> vitality` |
+| `ZERO_PROVIDER_KEY`      | Only if Zero ELD needs a different DriveHOS provider key than Vitality (defaults to `VITALITY_PROVIDER_KEY`). The carrier's key is entered in-bot with `/seteld <company> zero` |
 | `GOMOTIVE_TOKEN`         | Motive API key (Motive app → Developers → API keys) |
 | `ALERT_CHAT_ID`          | The channel/group ID that receives alerts (e.g. `-1001234567890`) |
 
@@ -80,7 +81,7 @@ Steps:
    uses Postgres automatically (no `DATABASE_URL` → it falls back to SQLite).
    The schema is created/migrated on first boot.
 3. Set service **Variables**: `BOT_TOKEN`, `ADMINS`, `QUANTUM_TOKEN`,
-   `VITALITY_PROVIDER_KEY` (if any company uses Vitality),
+   `VITALITY_PROVIDER_KEY` (if any company uses Vitality or Zero),
    `GOMOTIVE_TOKEN`, `ALERT_CHAT_ID` (plus any tuning overrides from
    `.env.example`). `DATABASE_URL` comes from the Postgres plugin.
 4. Deploy — the worker runs `python app.py`.

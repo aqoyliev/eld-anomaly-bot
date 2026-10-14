@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS companies (
     evo_provider_token  TEXT,
     evo_usdot           TEXT,
     vitality_company_key TEXT,
+    zero_company_key    TEXT,
     alert_chat_id       TEXT,
     active              INTEGER          NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS companies (
     evo_provider_token  TEXT,
     evo_usdot           TEXT,
     vitality_company_key TEXT,
+    zero_company_key    TEXT,
     alert_chat_id       TEXT,
     active              INTEGER NOT NULL DEFAULT 1,
     created_at          TEXT
@@ -162,7 +164,7 @@ _MIGRATIONS = [
     # (every pre-Samsara event came from GoMotive).
     ("provider", "TEXT"),
     # Which ELD system's stale record flagged the unit
-    # ("quantum"/"evo"/"vitality"). NULL = quantum (every pre-EVO event came
+    # ("quantum"/"evo"/"vitality"/"zero"). NULL = quantum (every pre-EVO event came
     # from Quantum).
     ("eld_provider", "TEXT"),
 ]
@@ -180,6 +182,9 @@ _COMPANY_MIGRATIONS = [
     # Third ELD-side provider: Vitality ELD (the carrier's X-API-Company-Key;
     # the bot-wide provider key is config.VITALITY_PROVIDER_KEY).
     ("vitality_company_key", "TEXT"),
+    # Fourth ELD-side provider: Zero ELD (same DriveHOS API as Vitality; the
+    # provider key is config.ZERO_PROVIDER_KEY).
+    ("zero_company_key", "TEXT"),
 ]
 
 # Migrations on a pre-existing `companies` table (CREATE TABLE above only covers
@@ -211,6 +216,7 @@ class Company:
     active: int = 1
     created_at: Optional[str] = None
     vitality_company_key: Optional[str] = None
+    zero_company_key: Optional[str] = None
 
     @property
     def evo_configured(self) -> bool:
@@ -225,10 +231,16 @@ class Company:
         return bool(self.vitality_company_key and config.VITALITY_PROVIDER_KEY)
 
     @property
+    def zero_configured(self) -> bool:
+        """Zero ELD needs the carrier's company key plus the bot-wide
+        ZERO_PROVIDER_KEY (which defaults to VITALITY_PROVIDER_KEY)."""
+        return bool(self.zero_company_key and config.ZERO_PROVIDER_KEY)
+
+    @property
     def has_eld(self) -> bool:
         """At least one ELD-side system is usable for this company."""
         return bool(self.quantum_token or self.evo_configured
-                    or self.vitality_configured)
+                    or self.vitality_configured or self.zero_configured)
 
 
 @dataclass
@@ -550,6 +562,7 @@ async def add_company(
     evo_provider_token: Optional[str] = None,
     evo_usdot: Optional[str] = None,
     vitality_company_key: Optional[str] = None,
+    zero_company_key: Optional[str] = None,
 ) -> Company:
     """Create a company and return it. ``alert_chat_id`` is left NULL — bind it to
     a Telegram group with :func:`bind_company_chat` before it will be polled."""
@@ -557,10 +570,11 @@ async def add_company(
     company_id = await _insert_returning_id(
         "INSERT INTO companies (name, gomotive_token, samsara_token, "
         "quantum_token, evo_api_key, evo_provider_token, evo_usdot, "
-        "vitality_company_key, created_at) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "vitality_company_key, zero_company_key, created_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         name, gomotive_token, samsara_token, quantum_token,
-        evo_api_key, evo_provider_token, evo_usdot, vitality_company_key, now,
+        evo_api_key, evo_provider_token, evo_usdot, vitality_company_key,
+        zero_company_key, now,
     )
     row = await _fetchrow("SELECT * FROM companies WHERE id = $1", company_id)
     return _row_to_company(row)
@@ -583,6 +597,7 @@ async def bind_company_chat(company_id: int, chat_id) -> None:
 ELD_CREDENTIAL_COLUMNS = {
     "quantum": "quantum_token",
     "vitality": "vitality_company_key",
+    "zero": "zero_company_key",
 }
 
 

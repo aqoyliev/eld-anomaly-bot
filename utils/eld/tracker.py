@@ -2,7 +2,7 @@
 
 Runs on a faster cadence than the 5-min sweep (default every 2 min). An anomaly
 counts only moving-while-disconnected time, so for each active anomaly it:
-  1. checks the ELD side (Quantum, EVO and/or Vitality, whichever the
+  1. checks the ELD side (Quantum, EVO, Vitality and/or Zero, whichever the
      company has) — if
      any VIN-plausible record reports fresh again, the device reconnected,
      so the anomaly is resolved (all-clear);
@@ -143,6 +143,16 @@ async def track_once(bot: Bot, company: store.Company) -> None:
             # Same stance as EVO: affected events stay open (no false resolve).
             logger.exception("Tracker[%s]: Vitality fetch failed — skipping "
                              "Vitality reconnect checks this cycle.", company.name)
+    zero_map: dict = {}
+    if company.zero_configured:
+        try:
+            zero_map = await vitalityeld.fetch_units(
+                company.zero_company_key, config.ZERO_PROVIDER_KEY,
+                config.ZERO_BASE_URL, brand="Zero",
+            )
+        except Exception:
+            logger.exception("Tracker[%s]: Zero fetch failed — skipping Zero "
+                             "reconnect checks this cycle.", company.name)
     now = datetime.utcnow()
 
     for e in events:
@@ -160,6 +170,9 @@ async def track_once(bot: Bot, company: store.Company) -> None:
         vt = vitalityeld.lookup(vitality_map, e.unit_number)
         if vt is not None and not vins_conflict(e.vin, vt.vin):
             eld_records.append(vt)
+        zr = vitalityeld.lookup(zero_map, e.unit_number)
+        if zr is not None and not vins_conflict(e.vin, zr.vin):
+            eld_records.append(zr)
         if any(
             not quantumeld.is_disconnected(
                 rec, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now

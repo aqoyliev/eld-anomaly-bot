@@ -61,6 +61,14 @@ EVO_BASE_URL = env.str("EVO_BASE_URL", "https://read.fiveeld.com/api/v2")
 VITALITY_BASE_URL = env.str("VITALITY_BASE_URL", "https://api.drivehos.app")
 VITALITY_PROVIDER_KEY = env.str("VITALITY_PROVIDER_KEY", "")
 
+# Zero ELD — fourth ELD-side provider. It runs on the same DriveHOS platform and
+# API as Vitality (same client, utils/eld/vitalityeld.py); it's a separate
+# provider only so alerts say "Zero ELD" and the carrier key has its own slot
+# (companies.zero_company_key, /seteld <company> zero). Base URL and provider
+# key default to Vitality's; override only if DriveHOS issues Zero its own.
+ZERO_BASE_URL = env.str("ZERO_BASE_URL", "") or VITALITY_BASE_URL
+ZERO_PROVIDER_KEY = env.str("ZERO_PROVIDER_KEY", "") or VITALITY_PROVIDER_KEY
+
 # Chat/channel that receives the anomaly alerts (e.g. -1001234567890).
 # Falls back to the first admin if not set. Seed-only (see note above).
 ALERT_CHAT_ID = env.str("ALERT_CHAT_ID", ADMINS[0] if ADMINS else "")
