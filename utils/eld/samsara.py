@@ -193,7 +193,7 @@ async def fetch_vins(
     The stats feed (/fleet/vehicles/stats) doesn't carry VINs, so the poller
     enriches the moving Samsara vehicles via this separate /fleet/vehicles
     lookup. The VIN is what lets detection tell two trucks that share a unit
-    number apart (compared against the Quantum VIN). Vehicles without a VIN on
+    number apart (compared against the ELD's VIN). Vehicles without a VIN on
     record are simply omitted (the detector falls back to the unit-number match
     when a VIN is missing)."""
     ids = [str(v) for v in vehicle_ids if v]

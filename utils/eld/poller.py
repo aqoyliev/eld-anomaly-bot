@@ -6,9 +6,9 @@ import logging
 from aiogram import Bot
 
 from data import config
-from . import evoeld, gomotive, quantumeld, samsara, store
+from . import evoeld, gomotive, samsara, store
 from .detector import find_anomalies, vins_conflict
-from .quantumeld import quantum_key
+from .units import unit_key
 from .formatting import format_alert
 
 logger = logging.getLogger(__name__)
@@ -31,16 +31,14 @@ async def _send_alert(
 
 async def poll_once(bot: Bot, company: store.Company) -> None:
     if not company.has_eld:
-        logger.warning("Company %s has no ELD-side credentials (Quantum or "
-                       "EVO); skipping poll cycle.", company.name)
+        logger.warning("Company %s has no EVO ELD credentials; skipping poll "
+                       "cycle.", company.name)
         return
 
     if not company.gomotive_token and not company.samsara_token:
         logger.warning("Company %s has no movement-provider token (GoMotive or "
                        "Samsara); skipping poll cycle.", company.name)
         return
-
-    quantum_base_url = config.QUANTUM_BASE_URL
 
     # 1. Ask the company's movement provider(s) which vehicles are moving right
     #    now. A company may run GoMotive, Samsara, or both (mixed fleet) — each
@@ -53,7 +51,7 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
     #    707 mixed fleet). _add keeps GoMotive's truck when both feeds report the
     #    SAME truck under a unit number (dual-device, matching/again-missing VIN),
     #    but keeps BOTH when their VINs clearly differ so detection can compare
-    #    each against Quantum and flag only the right one.
+    #    each against the ELD record and flag only the right one.
     moving: list = []
     seen: dict = {}  # unit_number -> list of vehicles already kept for it
 
@@ -88,8 +86,8 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             freshness_seconds=config.SAMSARA_GPS_FRESHNESS,
         )
         # The stats feed carries no VIN, so look the moving units' VINs up
-        # separately and stamp them on — detection compares VIN against Quantum
-        # (and GoMotive) to tell two trucks that share a unit number apart.
+        # separately and stamp them on — detection compares VIN against the
+        # ELD record to tell two trucks that share a unit number apart.
         vins = await samsara.fetch_vins(
             [v.vehicle_id for v in samsara_moving.values() if v.vehicle_id],
             company.samsara_token,
@@ -125,48 +123,36 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
 
     # 2. Look those vehicles up on the ELD side by unit number to read their
     #    last report time (a stale report => ELD disconnected/offline). Dedupe
-    #    the unit numbers — two trucks can share one, but each system holds a
-    #    single record per number. A company may run Quantum, EVO or both;
-    #    detection flags a unit only when every system that knows it is
-    #    stale.
+    #    the unit numbers — two trucks can share one, but the ELD holds a
+    #    single record per number.
     unit_numbers = list({v.unit_number for v in moving})
-    quantum_lookup = (
-        await quantumeld.fetch_vehicles(
-            unit_numbers, company.quantum_token, quantum_base_url
-        )
-        if company.quantum_token else {}
-    )
     evo_lookup: dict = {}
-    if company.evo_configured:
-        try:
-            # One call returns the whole EVO fleet; match the moving units by
-            # the same normalized key used for Quantum lookups.
-            snapshot = await evoeld.fetch_units(
-                company.evo_api_key, company.evo_provider_token,
-                company.evo_usdot, config.EVO_BASE_URL,
-            )
-            evo_lookup = {u: snapshot.get(quantum_key(u)) for u in unit_numbers}
-        except Exception:
-            # Degrade to Quantum-only for this cycle rather than aborting the
-            # company's poll; for an EVO-only company this yields "not in ELD"
-            # for every unit (no false anomalies, loudly logged).
-            logger.exception(
-                "Poll[%s]: EVO fetch failed — units treated as not in EVO "
-                "this cycle.", company.name,
-            )
+    try:
+        # One call returns the whole EVO fleet; match the moving units by the
+        # same normalized key both sides are reduced to.
+        snapshot = await evoeld.fetch_units(
+            company.evo_api_key, company.evo_provider_token,
+            company.evo_usdot, config.EVO_BASE_URL,
+        )
+        evo_lookup = {u: snapshot.get(unit_key(u)) for u in unit_numbers}
+    except Exception:
+        # Skip this cycle rather than aborting the company's poll: every unit
+        # reads as "not in ELD", which raises no false anomalies and is loudly
+        # logged.
+        logger.exception(
+            "Poll[%s]: EVO fetch failed — units treated as not in EVO "
+            "this cycle.", company.name,
+        )
 
     anomalies = find_anomalies(
-        moving, quantum_lookup, evo_lookup=evo_lookup,
+        moving, evo_lookup,
         threshold_seconds=config.ELD_STALE_THRESHOLD,
     )
-    # Units a provider reports moving but no ELD system has a record for.
-    # Normally these are units outside our Quantum/EVO accounts and are
-    # safely ignored; log them so a real fleet vehicle that ever lands here
-    # (i.e. a disconnection we'd otherwise miss) is visible.
-    not_in_eld = [
-        u for u in unit_numbers
-        if quantum_lookup.get(u) is None and evo_lookup.get(u) is None
-    ]
+    # Units a provider reports moving but the ELD has no record for. Normally
+    # these are units outside the carrier's EVO account and are safely ignored;
+    # log them so a real fleet vehicle that ever lands here (i.e. a
+    # disconnection we'd otherwise miss) is visible.
+    not_in_eld = [u for u in unit_numbers if evo_lookup.get(u) is None]
     found_in_eld = len(unit_numbers) - len(not_in_eld)
     logger.info(
         "Poll[%s]: %d moving, %d found on the ELD side, %d anomalies",
@@ -220,7 +206,7 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
 
 
 # Re-log a still-failing identical error only once every N cycles, so a
-# persistent condition (e.g. Quantum token not yet authorized) doesn't spam
+# persistent condition (e.g. EVO credentials not yet authorized) doesn't spam
 # the log every poll while staying visible enough not to be forgotten.
 _REPEAT_REMINDER_EVERY = 12  # at 5-min polls, ~once per hour
 

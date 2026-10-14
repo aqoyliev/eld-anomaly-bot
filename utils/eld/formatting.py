@@ -66,8 +66,9 @@ def _provider_label(event: AnomalyEvent) -> str:
 
 def _eld_label(event: AnomalyEvent) -> str:
     """Display name of the ELD system whose stale record flagged the event.
-    Legacy rows (eld_provider NULL) predate EVO support, so they were Quantum."""
-    return _ELD_LABELS.get(event.eld_provider, "Quantum ELD")
+    EVO is the only one here, and it also names rows written before the column
+    existed."""
+    return _ELD_LABELS.get(event.eld_provider, "EVO ELD")
 
 
 _ELD_LABELS = {"evo": "EVO ELD"}

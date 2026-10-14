@@ -1,15 +1,16 @@
 """Send a test ELD-disconnection alert through the real pipeline.
 
-This mocks the Quantum side only: it picks a vehicle that is *actually moving
-right now* on GoMotive (live data), then pretends Quantum reports that same unit
-as a stale/disconnected ELD.
+This mocks the ELD side only: it picks a vehicle that is *actually moving right
+now* on the company's movement provider (live GoMotive/Samsara data), then
+pretends EVO reports that same unit as a stale/disconnected ELD.
 The detector, store (dedup), and Telegram alert all run for real, so the 🚨
 message that lands in your alert channel is exactly what production will send.
 
 Run from the project root:
     .venv/Scripts/python.exe scripts/mock_alert.py
     .venv/Scripts/python.exe scripts/mock_alert.py --unit 1137 --stale-min 35
-    .venv/Scripts/python.exe scripts/mock_alert.py --cleanup   # resolve mock events
+    .venv/Scripts/python.exe scripts/mock_alert.py --company "U-HOME LOGISTICS LLC"
+    .venv/Scripts/python.exe scripts/mock_alert.py --cleanup   # delete mock events
 """
 
 import argparse
@@ -24,55 +25,80 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aiogram import Bot, types  # noqa: E402
 
 from data import config  # noqa: E402
-from utils.eld import gomotive, poller, quantumeld, store  # noqa: E402
-from utils.eld.quantumeld import QuantumVehicle  # noqa: E402
+from utils.eld import evoeld, gomotive, poller, samsara, store  # noqa: E402
+from utils.eld.evoeld import EvoVehicle  # noqa: E402
+from utils.eld.units import unit_key  # noqa: E402
 
 
-async def run(unit: str | None, stale_min: int, twice: bool) -> int:
+async def _pick_company(name: str | None):
+    """The named company, or the only one there is."""
+    if name:
+        return await store.get_company_by_name(name)
+    companies = await store.list_companies(active_only=False)
+    if len(companies) == 1:
+        return companies[0]
+    print("Several companies exist — name one with --company: "
+          + ", ".join(c.name for c in companies))
+    return None
+
+
+async def run(company_name: str | None, unit: str | None, stale_min: int,
+              twice: bool) -> int:
     await store.init_db()
 
-    company = await store.get_company_by_name("default")
+    company = await _pick_company(company_name)
     if company is None:
-        print("No 'default' company found. Set the legacy GOMOTIVE/QUANTUM env "
-              "vars (so init_db seeds it) or add one with the /addcompany bot command.")
+        print("No such company. Add one with the /addcompany bot command.")
+        return 1
+    if not company.evo_configured:
+        print(f"{company.name} has no EVO credentials, so the poll cycle would "
+              "skip it. Set them with /seteld <company> evo first.")
         return 1
 
-    moving = await gomotive.fetch_moving_vehicles(
-        company.gomotive_token, config.GOMOTIVE_BASE_URL,
-        threshold_mph=config.MOVING_SPEED_THRESHOLD,
-    )
+    # Whichever movement provider this company actually runs.
+    if company.gomotive_token:
+        moving = await gomotive.fetch_moving_vehicles(
+            company.gomotive_token, config.GOMOTIVE_BASE_URL,
+            threshold_mph=config.MOVING_SPEED_THRESHOLD,
+        )
+        where = "GoMotive"
+    else:
+        moving = await samsara.fetch_moving_vehicles(
+            company.samsara_token, config.SAMSARA_BASE_URL,
+            threshold_mph=config.MOVING_SPEED_THRESHOLD,
+            freshness_seconds=config.SAMSARA_GPS_FRESHNESS,
+        )
+        where = "Samsara"
     if not moving:
-        print("No vehicles are moving on GoMotive right now — try again shortly.")
+        print(f"No vehicles are moving on {where} right now — try again shortly.")
         return 1
 
     if unit is None:
         unit = next(iter(moving))
     if unit not in moving:
-        print(f"Unit {unit!r} is not currently moving on GoMotive. "
+        print(f"Unit {unit!r} is not currently moving on {where}. "
               f"Moving units include: {list(moving)[:10]}")
         return 1
 
-    gm = moving[unit]
-    print(f"Picked moving vehicle {unit!r} (VIN {gm.vin}): "
-          f"{gm.speed:.0f} mph @ {gm.location}")
+    mv = moving[unit]
+    print(f"Picked moving vehicle {unit!r} (VIN {mv.vin}) on {where}: "
+          f"{mv.speed:.0f} mph @ {mv.coordinates_label}")
 
-    # Fake Quantum: last report `stale_min` min old (UTC, like real Quantum times).
-    stale_time = datetime.utcnow() - timedelta(minutes=stale_min)
-    mock_vehicle = QuantumVehicle(
+    # Fake EVO: last report `stale_min` min old (UTC, like real EVO times).
+    mock_vehicle = EvoVehicle(
         unit_number=unit,
-        vin=gm.vin,
+        vin=mv.vin,
+        last_report_time=datetime.utcnow() - timedelta(minutes=stale_min),
         driver="TEST DRIVER",
-        state=None,
-        location="(Quantum last-known)",
-        last_report_time=stale_time,
     )
 
-    async def fake_fetch(unit_numbers, token=None, base_url=None, concurrency=10):
-        # Pretend Quantum reports the chosen unit as stale; others not found.
-        return {u: (mock_vehicle if u == unit else None) for u in unit_numbers}
+    async def fake_fetch(api_key=None, provider_token=None, usdot=None,
+                         base_url=None):
+        # The snapshot is keyed by normalized unit number, like the real one.
+        return {unit_key(unit): mock_vehicle}
 
-    # Patch only the Quantum lookup; everything else is the real pipeline.
-    quantumeld.fetch_vehicles = fake_fetch
+    # Patch only the ELD lookup; everything else is the real pipeline.
+    evoeld.fetch_units = fake_fetch
 
     bot = Bot(token=config.BOT_TOKEN, parse_mode=types.ParseMode.HTML)
     try:
@@ -104,18 +130,21 @@ async def cleanup() -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Send a test ELD-disconnect alert.")
+    parser.add_argument("--company", help="company name (default: the only one)")
     parser.add_argument("--unit", help="specific unit number (default: first moving)")
     parser.add_argument("--stale-min", type=int, default=35,
-                        help="minutes since the mocked Quantum report (default 35)")
+                        help="minutes since the mocked EVO report (default 35)")
     parser.add_argument("--once", action="store_true",
                         help="run a single cycle (default runs twice to show dedup)")
     parser.add_argument("--cleanup", action="store_true",
-                        help="resolve any mock events instead of sending an alert")
+                        help="delete any mock events instead of sending an alert")
     args = parser.parse_args()
 
     if args.cleanup:
         raise SystemExit(asyncio.run(cleanup()))
-    raise SystemExit(asyncio.run(run(args.unit, args.stale_min, twice=not args.once)))
+    raise SystemExit(asyncio.run(
+        run(args.company, args.unit, args.stale_min, twice=not args.once)
+    ))
 
 
 if __name__ == "__main__":

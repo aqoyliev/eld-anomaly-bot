@@ -1,7 +1,7 @@
 """Async store for ELD-disconnection anomaly events.
 
 An "anomaly event" is a single continuous period during which a vehicle is
-disconnected on its ELD (Quantum or EVO) while still moving on its movement
+disconnected on its EVO ELD while still moving on its movement
 provider (GoMotive/Samsara). While the event
 is ongoing it stays ``resolved = 0`` (an *active*/flagged vehicle); once the
 vehicle stops being anomalous it is marked resolved. This keeps a single row
@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Sequence
 
 from data import config
-from .quantumeld import quantum_key
+from .units import unit_key
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ CREATE TABLE IF NOT EXISTS companies (
     name                TEXT             NOT NULL UNIQUE,
     gomotive_token      TEXT,
     samsara_token       TEXT,
-    quantum_token       TEXT,
     evo_api_key         TEXT,
     evo_provider_token  TEXT,
     evo_usdot           TEXT,
@@ -87,7 +86,6 @@ CREATE TABLE IF NOT EXISTS companies (
     name                TEXT    NOT NULL UNIQUE,
     gomotive_token      TEXT,
     samsara_token       TEXT,
-    quantum_token       TEXT,
     evo_api_key         TEXT,
     evo_provider_token  TEXT,
     evo_usdot           TEXT,
@@ -159,9 +157,8 @@ _MIGRATIONS = [
     # re-queries motive_vehicle_id against that provider. NULL = gomotive
     # (every pre-Samsara event came from GoMotive).
     ("provider", "TEXT"),
-    # Which ELD system's stale record flagged the unit
-    # ("quantum"/"evo"). NULL = quantum (every pre-EVO event came
-    # from Quantum).
+    # Which ELD system's stale record flagged the unit ("evo"; the column
+    # predates this branch being EVO-only, so NULL rows are EVO too).
     ("eld_provider", "TEXT"),
 ]
 
@@ -177,22 +174,21 @@ _COMPANY_MIGRATIONS = [
     ("evo_usdot", "TEXT"),
 ]
 
-# Migrations on a pre-existing `companies` table (CREATE TABLE above only covers
-# fresh installs). The provider was renamed GreenLight -> Quantum ELD and the
-# same carrier token works against Quantum, so the token column is renamed in
-# place (value preserved). RENAME COLUMN needs SQLite >= 3.25.
-_COMPANY_RENAMES = [
-    ("greenlight_token", "quantum_token"),
-]
+# Column renames on a pre-existing `companies` table (CREATE TABLE above only
+# covers fresh installs). Nothing to rename on this branch: the one entry
+# that used to live here (greenlight_token -> quantum_token) became moot when
+# the Quantum provider was removed, so both names are simply dropped below.
+_COMPANY_RENAMES: list = []
 
-# The per-company base-URL override was dropped: every company uses the single
-# config.QUANTUM_BASE_URL. Drop the column under either name if a pre-existing DB
-# still has it (values were NULL or the old GreenLight default — no real loss).
+# Columns of providers this branch no longer has. They must be DROPPED, not
+# just ignored: every read does SELECT * and feeds the row to Company(**row),
+# so a leftover column raises TypeError on each poll cycle. The ELD-side ones
+# (greenlight = the old name for quantum) went with the Quantum and Vitality
+# providers; the base-URL overrides were replaced by a single config value.
 # DROP COLUMN needs SQLite >= 3.35; on Postgres it's DROP COLUMN IF EXISTS.
-# `vitality_company_key` goes too: this branch has no Vitality provider, and
-# a leftover column would break Company(**row) on SELECT *.
 _COMPANY_DROPS = ["greenlight_base_url", "quantum_base_url",
-                  "vitality_company_key"]
+                  "vitality_company_key", "greenlight_token",
+                  "quantum_token"]
 
 
 @dataclass
@@ -201,7 +197,6 @@ class Company:
     name: str
     gomotive_token: Optional[str] = None
     samsara_token: Optional[str] = None
-    quantum_token: Optional[str] = None
     evo_api_key: Optional[str] = None
     evo_provider_token: Optional[str] = None
     evo_usdot: Optional[str] = None
@@ -218,7 +213,7 @@ class Company:
     @property
     def has_eld(self) -> bool:
         """At least one ELD-side system is usable for this company."""
-        return bool(self.quantum_token or self.evo_configured)
+        return bool(self.evo_configured)
 
 
 @dataclass
@@ -269,8 +264,8 @@ class AnomalyEvent:
     # Movement API that flagged the unit ("gomotive"/"samsara"); the tracker
     # re-queries motive_vehicle_id against it. NULL = gomotive (legacy rows).
     provider: Optional[str] = None
-    # ELD system whose stale record flagged the unit ("quantum"/"evo").
-    # NULL = quantum (legacy rows predate EVO support).
+    # ELD system whose stale record flagged the unit ("evo"); NULL on rows
+    # written before the column existed.
     eld_provider: Optional[str] = None
 
     @property
@@ -425,29 +420,23 @@ async def _seed_default_company() -> None:
     the companies table is empty, so the live company is adopted exactly once and
     never re-seeded; backend-agnostic (uses the generic helpers).
 
-    A "default" company is created and every company-less event is stamped with its
-    id when EITHER the legacy token env vars are configured OR a legacy DB already
-    holds events. The second case matters: if an operator upgrades after clearing
-    the now-"seed-only" env vars, we must still adopt the existing rows — otherwise
-    every read query (all scoped by company_id) would render that history invisible
-    and unrecoverable. Such a company is created token-less and simply isn't polled
-    until its tokens are set via /addcompany (or the env vars are restored)."""
+    A "default" company is created and every company-less event is stamped with
+    its id when a legacy DB holds such events: all reads are scoped by
+    company_id, so leaving them unstamped would render that history invisible
+    and unrecoverable. The ELD credentials cannot be seeded from the
+    environment (EVO's are per-company only), so the company is created without
+    them and simply isn't polled until they are set with /seteld."""
     existing = await _fetchrow("SELECT id FROM companies LIMIT 1")
     if existing is not None:
         return
 
-    has_legacy_tokens = bool(
-        (config.GOMOTIVE_TOKEN or config.SAMSARA_TOKEN) and config.QUANTUM_TOKEN
-    )
     orphan = await _fetchrow("SELECT id FROM events WHERE company_id IS NULL LIMIT 1")
-    has_orphan_events = orphan is not None
-    if not has_legacy_tokens and not has_orphan_events:
+    if orphan is None:
         return  # fresh install, nothing to adopt
 
     company = await add_company(
         name="default",
         gomotive_token=config.GOMOTIVE_TOKEN or None,
-        quantum_token=config.QUANTUM_TOKEN or None,
         samsara_token=config.SAMSARA_TOKEN or None,
     )
     if config.ALERT_CHAT_ID:
@@ -455,13 +444,11 @@ async def _seed_default_company() -> None:
     await _execute(
         "UPDATE events SET company_id = $1 WHERE company_id IS NULL", company.id
     )
-    if not has_legacy_tokens:
-        logger.warning(
-            "Adopted pre-existing event history into a token-less 'default' "
-            "company (legacy GOMOTIVE_TOKEN/QUANTUM_TOKEN are not set). Its "
-            "history is preserved but it won't be polled until you set its tokens "
-            "via /addcompany or restore the seed env vars."
-        )
+    logger.warning(
+        "Adopted pre-existing event history into a 'default' company with no "
+        "ELD credentials. Its history is preserved but it won't be polled "
+        "until you set them with /seteld <company> evo."
+    )
 
 
 async def close() -> None:
@@ -534,7 +521,6 @@ async def add_company(
     *,
     name: str,
     gomotive_token: Optional[str],
-    quantum_token: Optional[str],
     samsara_token: Optional[str] = None,
     evo_api_key: Optional[str] = None,
     evo_provider_token: Optional[str] = None,
@@ -545,10 +531,9 @@ async def add_company(
     now = datetime.utcnow().isoformat(timespec="seconds")
     company_id = await _insert_returning_id(
         "INSERT INTO companies (name, gomotive_token, samsara_token, "
-        "quantum_token, evo_api_key, evo_provider_token, evo_usdot, "
-        "created_at) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        name, gomotive_token, samsara_token, quantum_token,
+        "evo_api_key, evo_provider_token, evo_usdot, created_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        name, gomotive_token, samsara_token,
         evo_api_key, evo_provider_token, evo_usdot, now,
     )
     row = await _fetchrow("SELECT * FROM companies WHERE id = $1", company_id)
@@ -652,11 +637,11 @@ async def active_companies() -> List[Company]:
 def ignore_key(unit_number: str) -> str:
     """Canonical form used to match an ignore entry against a live unit number.
 
-    Uses the same normalization as the ELD lookups (:func:`quantum_key`, which
+    Uses the same normalization as the ELD lookups (:func:`unit_key`, which
     strips owner tags and driver names), so an admin can copy the number
     straight out of an alert: "unit 796801  MAXIMO PAEZ" and "796801" both land
     on the key "796801"."""
-    return quantum_key(str(unit_number)).strip().upper()
+    return unit_key(str(unit_number)).strip().upper()
 
 
 async def _purge_expired_ignores() -> None:

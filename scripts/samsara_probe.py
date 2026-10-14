@@ -3,7 +3,7 @@
 Calls GET /fleet/vehicles/stats?types=gps and prints a per-vehicle summary
 (name, speed, position, reading time). Handy for confirming a company's
 Samsara token authenticates and that vehicle names line up with the unit
-numbers Quantum stores, before adding the company to the bot.
+numbers the ELD stores, before adding the company to the bot.
 
 Run from the project root:
     .venv/Scripts/python.exe scripts/samsara_probe.py --token <api-token>

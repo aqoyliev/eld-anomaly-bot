@@ -152,9 +152,9 @@ async def add_gomotive(message: types.Message, state: FSMContext):
     )
 
 
-_QUANTUM_PROMPT = (
-    "Now send the <b>Quantum ELD API token</b>, or <code>skip</code> if this "
-    "company's ELDs report to EVO instead.\n"
+_EVO_PROMPT = (
+    "Now send the <b>EVO ELD api key</b> (required — the ELD side is what the "
+    "anomaly check reads).\n"
     "<i>I'll delete that message too.</i>"
 )
 
@@ -174,8 +174,8 @@ async def add_samsara(message: types.Message, state: FSMContext):
             )
             return
         await state.update_data(samsara_token=None)
-        await state.set_state(AddCompany.quantum_token)
-        await message.answer("Samsara skipped.\n\n" + _QUANTUM_PROMPT)
+        await state.set_state(AddCompany.evo_api_key)
+        await message.answer("Samsara skipped.\n\n" + _EVO_PROMPT)
         return
     token = await _consume_secret(message)
     if not token:
@@ -183,35 +183,8 @@ async def add_samsara(message: types.Message, state: FSMContext):
                              "<code>skip</code>, or /cancel.")
         return
     await state.update_data(samsara_token=token)
-    await state.set_state(AddCompany.quantum_token)
-    await message.answer("Samsara token received ✅\n\n" + _QUANTUM_PROMPT)
-
-
-@dp.message_handler(state=AddCompany.quantum_token)
-async def add_quantum(message: types.Message, state: FSMContext):
-    if await _intercept_command(message):
-        return
-    if _is_skip(message):
-        await state.update_data(quantum_token=None)
-        await state.set_state(AddCompany.evo_api_key)
-        await message.answer(
-            "Quantum skipped.\n\nNow send the <b>EVO ELD api key</b> "
-            "(required — Quantum was skipped; a company needs at least one "
-            "ELD system).\n<i>I'll delete that message too.</i>"
-        )
-        return
-    token = await _consume_secret(message)
-    if not token:
-        await message.answer("Empty token — send the Quantum token, "
-                             "<code>skip</code>, or /cancel.")
-        return
-    await state.update_data(quantum_token=token)
     await state.set_state(AddCompany.evo_api_key)
-    await message.answer(
-        "Quantum token received ✅\n\nNow send the <b>EVO ELD api key</b>, or "
-        "<code>skip</code> if this company doesn't use EVO.\n"
-        "<i>I'll delete that message too.</i>"
-    )
+    await message.answer("Samsara token received ✅\n\n" + _EVO_PROMPT)
 
 
 @dp.message_handler(state=AddCompany.evo_api_key)
@@ -219,17 +192,13 @@ async def add_evo_api_key(message: types.Message, state: FSMContext):
     if await _intercept_command(message):
         return
     if _is_skip(message):
-        data = await state.get_data()
-        if not data.get("quantum_token"):
-            # No ELD system at all — the company could never be polled.
-            await message.answer(
-                "Quantum was skipped, so the <b>EVO credentials are required</b> "
-                "(a company needs at least one ELD system). Send the EVO api "
-                "key, or /cancel."
-            )
-            return
-        await _create_company(message, state, evo_api_key=None,
-                              evo_provider_token=None, evo_usdot=None)
+        # Without the ELD side there is nothing to compare movement against,
+        # so the company could never be polled.
+        await message.answer(
+            "The <b>EVO credentials are required</b> — without an ELD system "
+            "there is nothing to flag a disconnection against. Send the EVO "
+            "api key, or /cancel."
+        )
         return
     token = await _consume_secret(message)
     if not token:
@@ -284,7 +253,6 @@ async def _create_company(message: types.Message, state: FSMContext, *,
         name=data["name"],
         gomotive_token=data["gomotive_token"],
         samsara_token=data.get("samsara_token"),
-        quantum_token=data.get("quantum_token"),
         evo_api_key=evo_api_key,
         evo_provider_token=evo_provider_token,
         evo_usdot=evo_usdot,
@@ -294,7 +262,6 @@ async def _create_company(message: types.Message, state: FSMContext, *,
         f"✅ Created company <b>{escape(company.name)}</b> (id {company.id}).\n"
         f"  GoMotive: <code>{_mask(company.gomotive_token)}</code>\n"
         f"  Samsara: <code>{_mask(company.samsara_token)}</code>\n"
-        f"  Quantum: <code>{_mask(company.quantum_token)}</code>\n"
         f"  EVO: <code>{evo_label}</code>\n\n"
         "It won't be polled until an alert chat is linked. Go to its alert group "
         f"and send:\n<code>/bindhere {escape(company.name)}</code>"
@@ -394,7 +361,6 @@ async def list_companies(message: types.Message):
             f"<b>[{c.id}] {escape(c.name)}</b> — {'active' if c.active else 'inactive'}, {polled}\n"
             f"   GoMotive <code>{_mask(c.gomotive_token)}</code> · "
             f"Samsara <code>{_mask(c.samsara_token)}</code> · "
-            f"Quantum <code>{_mask(c.quantum_token)}</code> · "
             f"EVO <code>{evo}</code> · chat {chat}"
         )
     await message.answer("\n".join(lines))

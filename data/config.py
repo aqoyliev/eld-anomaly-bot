@@ -14,22 +14,13 @@ IP = env.str("ip", "")  # Hosting IP address (unused; long-polling bot)
 
 # --- ELD anomaly detection ---------------------------------------------------
 
-# LEGACY / SEED-ONLY: QUANTUM_TOKEN, GOMOTIVE_TOKEN and ALERT_CHAT_ID are no
+# LEGACY / SEED-ONLY: GOMOTIVE_TOKEN, SAMSARA_TOKEN and ALERT_CHAT_ID are no
 # longer read by the live poll/track loops — those run per-company from the
 # `companies` DB table (see utils/eld/store.py, managed via the in-bot admin
-# commands /addcompany, /bindhere, etc.). On first start against a DB with no
-# companies, init_db() seeds a single "default" company from these values so the
-# original single-company production setup keeps working untouched. New companies
-# are added with the admin commands instead. The two *_BASE_URL constants are
-# the GoMotive and Quantum ELD base URLs — both constant for all companies (the
-# per-company Quantum base-URL override was removed; all companies use the same
-# Quantum endpoint).
-
-# Quantum ELD vehicle-location API
-QUANTUM_BASE_URL = env.str(
-    "QUANTUM_BASE_URL", "https://api.quantumeld.com/logger/external"
-)
-QUANTUM_TOKEN = env.str("QUANTUM_TOKEN", "")  # seed-only (see note above)
+# commands /addcompany, /bindhere, etc.). They only still matter when an old
+# single-company DB is adopted on first start. New companies are added with the
+# admin commands instead. The *_BASE_URL constants below are the same for every
+# company; only credentials are per-company.
 
 # GoMotive (Motive) fleet API — ground-truth movement / speed
 GOMOTIVE_BASE_URL = env.str("GOMOTIVE_BASE_URL", "https://api.gomotive.com")
@@ -41,9 +32,9 @@ GOMOTIVE_TOKEN = env.str("GOMOTIVE_TOKEN", "")  # seed-only (see note above)
 SAMSARA_BASE_URL = env.str("SAMSARA_BASE_URL", "https://api.samsara.com")
 SAMSARA_TOKEN = env.str("SAMSARA_TOKEN", "")  # seed-only (see note above)
 
-# EVO ELD tracking API — second ELD-side provider (same role as Quantum: report
-# freshness = disconnection signal). Per-company credentials (api key, provider
-# token, USDOT) live in the companies table; only the base URL is global.
+# EVO ELD tracking API — the ELD-side provider (report freshness = the
+# disconnection signal). Per-company credentials (api key, provider token,
+# USDOT) live in the companies table; only the base URL is global.
 # NOTE: EVO ELD and TT ELD (fiveeld.com) run the SAME platform software on
 # SEPARATE tenants — a key issued on one tenant is unknown to the other. The
 # MZ CARGO account (USDOT 3775005) lives on the fiveeld tenant, so the base is
@@ -61,7 +52,7 @@ ALERT_CHAT_ID = env.str("ALERT_CHAT_ID", ADMINS[0] if ADMINS else "")
 # How often to poll both APIs, in seconds (default 5 minutes).
 POLL_INTERVAL = env.int("POLL_INTERVAL", 300)
 
-# A Quantum report older than this many seconds means the ELD is treated as
+# An ELD report older than this many seconds means the ELD is treated as
 # disconnected / offline (default 10 minutes).
 ELD_STALE_THRESHOLD = env.int("ELD_STALE_THRESHOLD", 600)
 
@@ -87,7 +78,8 @@ GOMOTIVE_GPS_FRESHNESS = env.int("GOMOTIVE_GPS_FRESHNESS", 900)
 
 # --- Tracking of already-flagged (disconnected) units ------------------------
 # How often the tracker re-checks disconnected units, in seconds (default 2 min).
-# It re-queries GoMotive by vehicle id (cheap) plus Quantum for reconnection.
+# It re-queries the movement provider by vehicle id (cheap) plus EVO for
+# reconnection.
 TRACK_INTERVAL = env.int("TRACK_INTERVAL", 120)
 # Re-notify the group about a still-MOVING disconnected unit this often (default
 # 10 min). Stopped units get no reminder — their anomaly is closed on stop.

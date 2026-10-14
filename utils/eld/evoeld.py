@@ -1,15 +1,11 @@
 """Client for the EVO ELD tracking API (read.evoeld.com).
 
-EVO is a second ELD-side provider, playing the same role as Quantum: the
-freshness of a unit's last report decides whether its ELD looks disconnected.
-A company may run Quantum, EVO, or both (mixed fleet) — detection checks a
-moving unit against every ELD system the company has and flags it only when
-all of them are stale (see detector.find_anomalies).
+EVO is the ELD-side provider: the freshness of a unit's last report decides
+whether its ELD looks disconnected (see detector.find_anomalies).
 
-Unlike Quantum's per-unit lookups, EVO returns the whole fleet in one call
-(``GET /units-by-usdot/{usdot}``), so a poll cycle costs a single request.
-Auth is two headers: ``x-api-key`` plus ``provider-token``; the carrier's
-USDOT number goes in the URL path.
+EVO returns the whole fleet in one call (``GET /units-by-usdot/{usdot}``), so
+a poll cycle costs a single request. Auth is two headers: ``x-api-key`` plus
+``provider-token``; the carrier's USDOT number goes in the URL path.
 """
 
 import logging
@@ -19,7 +15,7 @@ from typing import Dict, Optional
 
 import aiohttp
 
-from .quantumeld import quantum_key
+from .units import unit_key
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +27,8 @@ class EvoVehicle:
     last_report_time: Optional[datetime]
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-    # EVO's tracking feed carries no driver name; the field exists for parity
-    # with QuantumVehicle so downstream code (poller/detector) stays duck-typed.
+    # EVO's tracking feed carries no driver name; the field exists so the alert
+    # formatter can read it on any ELD record without a special case.
     driver: Optional[str] = None
 
     @property
@@ -77,7 +73,7 @@ async def fetch_units(
     api_key: str, provider_token: str, usdot: str, base_url: str
 ) -> Dict[str, EvoVehicle]:
     """Fetch the full EVO fleet snapshot for a carrier, keyed by NORMALIZED
-    unit number (:func:`quantum_key`, same normalization applied to movement-
+    unit number (:func:`unit_key`, the same normalization applied to movement-
     provider unit numbers before matching).
 
     Raises on HTTP/auth errors so a credential problem surfaces instead of
@@ -103,5 +99,5 @@ async def fetch_units(
     for raw in data.get("units") or []:
         vehicle = _parse_unit(raw)
         if vehicle is not None:
-            units[quantum_key(vehicle.unit_number)] = vehicle
+            units[unit_key(vehicle.unit_number)] = vehicle
     return units

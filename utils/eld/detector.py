@@ -1,11 +1,9 @@
 """Cross-reference movement-provider data against ELD report freshness.
 
 Flow: the movement provider (GoMotive or Samsara, per company) tells us which
-vehicles are moving; for each we have already looked up its ELD record(s) by
-unit number — Quantum, EVO, or both (a company may run a mixed ELD fleet). An
-anomaly is a vehicle that is moving on the provider while EVERY ELD system
-that knows it reports stale: if either system is fresh, that's the truck's
-actual ELD reporting fine (the other's record is a leftover for the number).
+vehicles are moving; for each we have already looked up its EVO ELD record by
+unit number. An anomaly is a vehicle that is moving on the provider while its
+ELD record is stale — the ELD looks disconnected while the truck drives.
 """
 
 import logging
@@ -14,14 +12,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional
 
-from . import quantumeld
-from .quantumeld import QuantumVehicle
-
 logger = logging.getLogger(__name__)
 
 # Two VINs are treated as the SAME truck if they differ by at most this many
 # single-character edits (Damerau-Levenshtein, so a transposition counts as 1).
-# Real fleets carry occasional VIN-entry typos between Quantum and the movement
+# Real fleets carry occasional VIN-entry typos between the ELD and the movement
 # provider — a transposition (unit 1137: "…MD…" vs "…DM…") or a mistyped digit
 # — so an exact-match requirement would drop genuine anomalies. Anything beyond
 # this is a different vehicle that merely shares a unit number.
@@ -31,12 +26,11 @@ _VIN_MISMATCH_TOLERANCE = 2
 @dataclass
 class Anomaly:
     unit_number: str
-    # QuantumVehicle or EvoVehicle — both expose the same attribute surface
-    # (vin, driver, last_report_time), so downstream code is duck-typed. When
-    # a unit is stale in BOTH systems, this is the record with the most recent
-    # report (the truck's most plausible actual ELD).
+    # An EvoVehicle. Read duck-typed downstream (vin, driver,
+    # last_report_time), so a second ELD-side provider can be added back
+    # without touching the consumers.
     eld: object
-    # Which ELD system the record above came from ("quantum"/"evo").
+    # Which ELD system the record above came from ("evo").
     eld_provider: str
     # GoMotiveVehicle or SamsaraVehicle — both expose the same attribute
     # surface (speed, latitude/longitude, vehicle_id, coordinates_label,
@@ -95,73 +89,62 @@ def vins_conflict(a: Optional[str], b: Optional[str]) -> bool:
     return _edit_distance(na, nb, cap=_VIN_MISMATCH_TOLERANCE) > _VIN_MISMATCH_TOLERANCE
 
 
+def is_disconnected(
+    vehicle,
+    *,
+    threshold_seconds: int,
+    now: Optional[datetime] = None,
+) -> bool:
+    """True if the vehicle's last ELD report is older than the threshold
+    (i.e. the ELD looks disconnected/offline). Duck-typed on
+    ``last_report_time``, so any ELD-side record works.
+
+    Report times are UTC (naive), so compare against UTC now."""
+    if vehicle.last_report_time is None:
+        return False
+    now = now or datetime.utcnow()
+    return (now - vehicle.last_report_time).total_seconds() >= threshold_seconds
+
+
 def find_anomalies(
     moving: Iterable[object],
-    quantum_lookup: Dict[str, Optional[QuantumVehicle]],
+    evo_lookup: Dict[str, Optional[object]],
     *,
-    evo_lookup: Optional[Dict[str, object]] = None,
     threshold_seconds: int,
     now: Optional[datetime] = None,
 ) -> List[Anomaly]:
     """``moving`` is an iterable of movement vehicles (each exposes
-    ``unit_number``/``vin``); ``quantum_lookup``/``evo_lookup`` map unit numbers
-    to that system's record (or None if not found there).
+    ``unit_number``/``vin``); ``evo_lookup`` maps unit numbers to the ELD's
+    record for that number (or None if the ELD doesn't know it).
 
     A list rather than a unit-keyed dict because two different trucks can share
     a unit number across providers (GoMotive vs Samsara) — both must be checked,
     and the VIN comparison below decides which one (if either) is the truck
-    the ELD system holds under that number.
+    the ELD holds under that number.
 
     ``now`` defaults to UTC, matching the (naive) UTC report times."""
     now = now or datetime.utcnow()
-    evo_lookup = evo_lookup or {}
     anomalies: List[Anomaly] = []
     for mv in moving:
         unit_number = mv.unit_number
-        candidates = [
-            (system, rec)
-            for system, rec in (
-                ("quantum", quantum_lookup.get(unit_number)),
-                ("evo", evo_lookup.get(unit_number)),
-            )
-            if rec is not None
-        ]
-        if not candidates:
+        rec = evo_lookup.get(unit_number)
+        if rec is None:
             continue
         # Same unit number, different truck: fleets reuse unit numbers (and two
-        # providers can each have a different truck under one number), so the
-        # ELD record found by unit number can belong to a DIFFERENT vehicle
-        # than this one. Comparing VINs (Motive/Samsara vs the ELD) catches that
-        # collision so we don't flag — or read staleness off — the wrong truck.
-        # VIN stays a guard on top of the unit-number match: only a clear
-        # mismatch is rejected.
-        matching = []
-        for system, rec in candidates:
-            if vins_conflict(getattr(mv, "vin", None), rec.vin):
-                logger.info(
-                    "Skipping %s: VIN mismatch (provider %s vs %s %s) — "
-                    "same unit number, different truck.",
-                    unit_number, getattr(mv, "vin", None), system, rec.vin,
-                )
-                continue
-            matching.append((system, rec))
-        if not matching:
-            continue
-        # Anomalous only when EVERY ELD system that knows the truck is stale.
-        # A fresh record in either system means its actual ELD is reporting
-        # fine — in a mixed Quantum+EVO fleet the other system's stale record
-        # for the same number is just a leftover, not a disconnection.
-        if any(
-            not quantumeld.is_disconnected(
-                rec, threshold_seconds=threshold_seconds, now=now
+        # movement providers can each have a different truck under one number),
+        # so the ELD record found by unit number can belong to a DIFFERENT
+        # vehicle than this one. Comparing VINs (Motive/Samsara vs the ELD)
+        # catches that collision so we don't flag — or read staleness off — the
+        # wrong truck. VIN stays a guard on top of the unit-number match: only
+        # a clear mismatch is rejected.
+        if vins_conflict(getattr(mv, "vin", None), rec.vin):
+            logger.info(
+                "Skipping %s: VIN mismatch (provider %s vs evo %s) — "
+                "same unit number, different truck.",
+                unit_number, getattr(mv, "vin", None), rec.vin,
             )
-            for _, rec in matching
-        ):
             continue
-        # All stale: report off the most recently heard-from record (the
-        # truck's most plausible actual ELD).
-        system, rec = max(
-            matching, key=lambda sr: sr[1].last_report_time or datetime.min
-        )
-        anomalies.append(Anomaly(unit_number, rec, system, mv))
+        if not is_disconnected(rec, threshold_seconds=threshold_seconds, now=now):
+            continue
+        anomalies.append(Anomaly(unit_number, rec, "evo", mv))
     return anomalies
