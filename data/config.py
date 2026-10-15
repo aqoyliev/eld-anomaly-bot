@@ -85,6 +85,17 @@ ELD_STALE_THRESHOLD = env.int("ELD_STALE_THRESHOLD", 600)
 # detection — set high enough to skip GPS jitter and yard/dock maneuvering.
 MOVING_SPEED_THRESHOLD = env.float("MOVING_SPEED_THRESHOLD", 10.0)
 
+# "ELD not recording" alerts: a Vitality/Zero ELD whose status feed is fresh
+# but says the truck is stationary (speed 0) while the movement provider shows
+# it driving. Such an ELD pings its position yet logs no driving (seen
+# 2026-10-14/15), which the report-freshness check cannot see. Alert only once
+# this has held for NO_DATA_ALERT_CYCLES consecutive polls at or above
+# NO_DATA_MIN_SPEED mph on the movement provider. NO_DATA_ALERTS=0 turns it off
+# (the ELD-MISMATCH log lines stay).
+NO_DATA_ALERTS = env.bool("NO_DATA_ALERTS", True)
+NO_DATA_ALERT_CYCLES = env.int("NO_DATA_ALERT_CYCLES", 2)
+NO_DATA_MIN_SPEED = env.float("NO_DATA_MIN_SPEED", 20.0)
+
 # Samsara's stats snapshot returns the LAST KNOWN GPS reading even if the
 # gateway has been offline for months — a dead unit can sit frozen at 60 mph
 # forever. A reading older than this many seconds is not treated as current

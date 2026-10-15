@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS events (
     company_id          INTEGER,
     stopped_at          TEXT,
     provider            TEXT,
-    eld_provider        TEXT
+    eld_provider        TEXT,
+    kind                TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 CREATE TABLE IF NOT EXISTS unit_ignores (
@@ -120,7 +121,8 @@ CREATE TABLE IF NOT EXISTS events (
     company_id          INTEGER,
     stopped_at          TEXT,
     provider            TEXT,
-    eld_provider        TEXT
+    eld_provider        TEXT,
+    kind                TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_active ON events (unit_number, resolved);
 CREATE TABLE IF NOT EXISTS unit_ignores (
@@ -167,6 +169,10 @@ _MIGRATIONS = [
     # ("quantum"/"evo"/"vitality"/"zero"). NULL = quantum (every pre-EVO event came
     # from Quantum).
     ("eld_provider", "TEXT"),
+    # What flagged the unit: NULL = the ELD's report went stale (disconnected);
+    # "no_data" = the ELD still reports but shows no movement while the movement
+    # provider shows the truck driving (see observer.py).
+    ("kind", "TEXT"),
 ]
 
 # Columns added to a pre-existing `companies` table (same idempotent ADD COLUMN
@@ -294,6 +300,13 @@ class AnomalyEvent:
     # ELD system whose stale record flagged the unit ("quantum"/"evo").
     # NULL = quantum (legacy rows predate EVO support).
     eld_provider: Optional[str] = None
+    # NULL = stale/disconnected ELD; "no_data" = ELD online but not recording
+    # movement. The tracker resolves the two differently.
+    kind: Optional[str] = None
+
+    @property
+    def is_no_data(self) -> bool:
+        return self.kind == "no_data"
 
     @property
     def disconnect_dt(self) -> Optional[datetime]:
@@ -804,6 +817,7 @@ async def open_event(
     lon: Optional[float] = None,
     provider: Optional[str] = None,
     eld_provider: Optional[str] = None,
+    kind: Optional[str] = None,
 ) -> AnomalyEvent:
     """Create a new active anomaly event and return it (caller then alerts).
     ``last_alert_at`` is seeded with ``now`` since the caller sends the initial
@@ -813,10 +827,10 @@ async def open_event(
         "INSERT INTO events (company_id, unit_number, vin, driver, "
         "eld_disconnect_time, first_detected, last_seen, last_speed, last_location, "
         "motive_vehicle_id, last_lat, last_lon, last_alert_at, provider, "
-        "eld_provider) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+        "eld_provider, kind) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
         company_id, unit_number, vin, driver, eld_disconnect_time, now, now, speed,
-        location, motive_vehicle_id, lat, lon, now, provider, eld_provider,
+        location, motive_vehicle_id, lat, lon, now, provider, eld_provider, kind,
     )
     row = await _fetchrow("SELECT * FROM events WHERE id = $1", event_id)
     return _row_to_event(row)

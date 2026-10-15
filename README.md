@@ -31,6 +31,13 @@ Every 5 minutes the poller runs this pipeline:
 4. **Alert, de-duplicate, and track** — a new anomaly sends one alert and opens
    an event; ongoing anomalies update silently (no duplicate alerts); when a
    truck starts reporting again the event auto-resolves.
+5. **ELD online but not recording** (Vitality / Zero only) — an ELD can keep
+   pinging its position while it has lost the truck's engine data, so the
+   report-freshness check never fires. When a fresh Vitality/Zero record says
+   the truck is stationary while the movement provider shows it at
+   `NO_DATA_MIN_SPEED` mph or more for `NO_DATA_ALERT_CYCLES` polls in a row,
+   a separate "ELD NOT RECORDING MOVEMENT" event is opened (resolved when the ELD
+   reports movement again). Every disagreement is also logged as `ELD-MISMATCH`.
 
 ```
 GoMotive/Samsara (moving vehicles) ──► Quantum lookup per unit ──► stale? ──► 🚨 alert
@@ -155,6 +162,9 @@ All settings live in `.env` (gitignored, never committed):
 | `POLL_INTERVAL`          | `300`                                            | Seconds between poll cycles |
 | `ELD_STALE_THRESHOLD`    | `600`                                            | Seconds before a Quantum report counts as disconnected |
 | `MOVING_SPEED_THRESHOLD` | `10`                                             | mph above which a vehicle is "moving" |
+| `NO_DATA_ALERTS`         | `1`                                              | `0` turns the "ELD not recording movement" alerts off (the `ELD-MISMATCH` log lines stay) |
+| `NO_DATA_ALERT_CYCLES`   | `2`                                              | Consecutive polls the ELD must look stationary while the truck drives before alerting |
+| `NO_DATA_MIN_SPEED`      | `20`                                             | mph the movement provider must show for that case |
 | `DATABASE_URL`           | — (unset)                                        | Postgres DSN. If set, the bot uses PostgreSQL (asyncpg); Railway's Postgres plugin injects this. Unset → SQLite. |
 | `DB_PATH`                | `db.sqlite3`                                     | SQLite database file (used when `DATABASE_URL` is unset) |
 

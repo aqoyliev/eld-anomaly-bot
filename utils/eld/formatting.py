@@ -81,6 +81,17 @@ def _provider_badge(event: AnomalyEvent) -> str:
 
 def format_alert(event: AnomalyEvent, company_name: Optional[str] = None) -> str:
     """The 🚨 alert sent when a new anomaly is detected."""
+    if event.is_no_data:
+        return (
+            "⚠️ <b>ELD NOT RECORDING MOVEMENT</b>\n\n"
+            f"{_company_line(company_name)}"
+            f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
+            f"<b>Current coordinates:</b> <code>{escape(event.last_location or 'unknown')}</code>\n"
+            f"<b>Current speed:</b> {_fmt_speed(event.last_speed)}\n"
+            f"<b>Flagged at:</b> {_fmt_time(event.first_detected)}\n\n"
+            f"<i>{_eld_label(event)} is online but shows the truck stationary while "
+            f"{_provider_label(event)} shows it moving. Driving may not be logged.</i>"
+        )
     return (
         "🚨 <b>ELD DISCONNECTION ANOMALY</b>\n\n"
         f"{_company_line(company_name)}"
@@ -97,6 +108,15 @@ def format_stopped(
     event: AnomalyEvent, coords: str, company_name: Optional[str] = None
 ) -> str:
     """Sent once when a disconnected unit pulls over / stops moving."""
+    if event.is_no_data:
+        return (
+            "⏸ <b>UNIT STOPPED</b>\n\n"
+            f"{_company_line(company_name)}"
+            f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
+            f"<b>Stopped at:</b> <code>{escape(coords)}</code>\n"
+            f"<b>ELD was not recording for:</b> {human_duration(event.duration_seconds())}\n\n"
+            f"<i>No movement on {_provider_label(event)} since the last check.</i>"
+        )
     return (
         "⏸ <b>DISCONNECTED UNIT STOPPED</b>\n\n"
         f"{_company_line(company_name)}"
@@ -110,6 +130,15 @@ def format_stopped(
 
 def format_reminder(event: AnomalyEvent, company_name: Optional[str] = None) -> str:
     """Periodic reminder that a unit is still disconnected."""
+    if event.is_no_data:
+        return (
+            "⚠️ <b>ELD STILL NOT RECORDING</b>\n\n"
+            f"{_company_line(company_name)}"
+            f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
+            f"<b>Current coordinates:</b> <code>{escape(event.last_location or 'unknown')}</code>\n"
+            f"<b>Current speed:</b> {_fmt_speed(event.last_speed)}\n"
+            f"<b>Duration:</b> {human_duration(event.duration_seconds())}"
+        )
     return (
         "🚨 <b>STILL DISCONNECTED</b>\n\n"
         f"{_company_line(company_name)}"
@@ -124,6 +153,13 @@ def format_reconnected(
     event: AnomalyEvent, company_name: Optional[str] = None
 ) -> str:
     """The all-clear: sent when a unit's ELD comes back online (resolved)."""
+    if event.is_no_data:
+        return (
+            "✅ <b>ELD RECORDING AGAIN</b>\n\n"
+            f"{_company_line(company_name)}"
+            f"<b>Unit:</b> <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)}\n"
+            f"<b>Was not recording for:</b> {human_duration(event.duration_seconds())}"
+        )
     return (
         "✅ <b>ELD RECONNECTED</b>\n\n"
         f"{_company_line(company_name)}"
@@ -132,13 +168,21 @@ def format_reconnected(
     )
 
 
+def _since_line(event: AnomalyEvent) -> str:
+    """The "disconnected <time>" fragment of /status and /history lines; a
+    no-data event has no disconnect time, so it reads from when it was flagged."""
+    if event.is_no_data:
+        return f"not recording since {_fmt_time(event.first_detected)}"
+    return f"disconnected {_fmt_time(event.eld_disconnect_time)}"
+
+
 def format_status_line(event: AnomalyEvent) -> str:
     return (
         f"🔴 <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)} "
         f"· {_provider_badge(event)}\n"
         f"    🏎️ {_fmt_speed(event.last_speed)} · "
         f"📍 {escape(event.last_location or 'unknown')}\n"
-        f"    🕑 disconnected {_fmt_time(event.eld_disconnect_time)} "
+        f"    🕑 {_since_line(event)} "
         f"· ongoing {human_duration(event.duration_seconds())}"
     )
 
@@ -153,5 +197,5 @@ def format_history_line(event: AnomalyEvent) -> str:
     return (
         f"{marker} <code>{escape(event.unit_number)}</code>{_driver_suffix(event.driver)} "
         f"· {_provider_badge(event)}\n"
-        f"    🕑 disconnected {_fmt_time(event.eld_disconnect_time)} · {tail}"
+        f"    🕑 {_since_line(event)} · {tail}"
     )

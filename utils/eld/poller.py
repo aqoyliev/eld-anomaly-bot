@@ -29,6 +29,48 @@ async def _send_alert(
         logger.exception("Failed to send alert for vehicle %s", event.unit_number)
 
 
+async def _handle_no_data(
+    bot: Bot, company: store.Company, item: observer.NoDataAnomaly
+) -> None:
+    """Open (or refresh) the "ELD not recording movement" event for a unit the
+    observer has held in that state long enough. One event per unit, like the
+    stale-ELD anomalies, and never alongside one of them."""
+    mv, rec = item.movement, item.eld
+    location = mv.coordinates_label
+    existing = await store.get_active_event(company.id, item.unit_number)
+    if existing:
+        if not existing.is_no_data:
+            return  # a disconnected-ELD anomaly is already open for this unit
+        if existing.stopped_at is None:
+            await store.touch_event(existing.id, speed=mv.speed, location=location,
+                                    lat=mv.latitude, lon=mv.longitude)
+            return
+        # Paused (the unit had stopped) but moving without ELD data again: close
+        # the paused span at its stop time and open a new one.
+        await store.resolve_event(existing.id, at=existing.stopped_at)
+        logger.info("Poll[%s]: %s rolling again, ELD still not recording — "
+                    "closed paused span, new event.", company.name, item.unit_number)
+    event = await store.open_event(
+        company_id=company.id,
+        unit_number=item.unit_number,
+        vin=rec.vin,
+        driver=rec.driver,
+        eld_disconnect_time=None,
+        speed=mv.speed,
+        location=location,
+        motive_vehicle_id=str(mv.vehicle_id) if mv.vehicle_id is not None else None,
+        lat=mv.latitude,
+        lon=mv.longitude,
+        provider=mv.provider,
+        eld_provider=item.eld_provider,
+        kind="no_data",
+    )
+    logger.warning("Poll[%s]: %s ELD (%s) not recording movement for %d polls — "
+                   "alerting.", company.name, item.unit_number, item.eld_provider,
+                   item.cycles)
+    await _send_alert(bot, company, event)
+
+
 async def poll_once(bot: Bot, company: store.Company) -> None:
     if not company.has_eld:
         logger.warning("Company %s has no ELD-side credentials (Quantum, EVO, "
@@ -195,13 +237,16 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
         vitality_lookup=vitality_lookup, zero_lookup=zero_lookup,
         threshold_seconds=config.ELD_STALE_THRESHOLD,
     )
-    # Observation only (never alerts): log units whose Vitality/Zero record is
-    # fresh yet disagrees with the movement provider — an ELD that pings its
-    # position but records no engine data.
+    # Log units whose Vitality/Zero record is fresh yet disagrees with the
+    # movement provider — an ELD that pings its position but records no engine
+    # data. The strong case (ELD stationary, truck clearly driving, held for
+    # several polls) also comes back as an alert candidate.
+    no_data: list = []
     try:
-        observer.observe(
+        no_data = observer.observe(
             company.id, company.name, moving,
             vitality_lookup=vitality_lookup, zero_lookup=zero_lookup,
+            quantum_lookup=quantum_lookup, evo_lookup=evo_lookup,
             threshold_seconds=config.ELD_STALE_THRESHOLD,
         )
     except Exception:
@@ -259,6 +304,14 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
             eld_provider=anomaly.eld_provider,
         )
         await _send_alert(bot, company, event)
+
+    if config.NO_DATA_ALERTS:
+        for item in no_data:
+            try:
+                await _handle_no_data(bot, company, item)
+            except Exception:
+                logger.exception("Poll[%s]: no-data event failed for %s.",
+                                 company.name, item.unit_number)
 
     # NOTE: the reconnect all-clear is NOT done here — the 2-min tracker owns it
     # (and pauses an event when the truck stops). This loop opens events: a brand

@@ -55,6 +55,14 @@ def _reading_is_fresh(vehicle, provider: str) -> bool:
     return gomotive._is_fresh(vehicle, config.GOMOTIVE_GPS_FRESHNESS)
 
 
+def _shows_movement(rec) -> bool:
+    """A DriveHOS record that reports the truck moving (status feed)."""
+    speed = getattr(rec, "speed", None)
+    return getattr(rec, "status", None) == "IN_MOTION" or (
+        speed is not None and speed > 0
+    )
+
+
 def ignore_keyboard(event_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup().add(
         InlineKeyboardButton(
@@ -173,17 +181,31 @@ async def track_once(bot: Bot, company: store.Company) -> None:
         zr = vitalityeld.lookup(zero_map, e.unit_number)
         if zr is not None and not vins_conflict(e.vin, zr.vin):
             eld_records.append(zr)
-        if any(
-            not quantumeld.is_disconnected(
-                rec, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
+        if e.is_no_data:
+            # An "ELD not recording" event is over when a fresh DriveHOS record
+            # shows movement again. A fresh report alone proves nothing: the
+            # ELD was reporting all along. Quantum/EVO records have no speed.
+            resumed = any(
+                _shows_movement(rec) and not quantumeld.is_disconnected(
+                    rec, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
+                )
+                for rec in (vt, zr)
+                if rec is not None and not vins_conflict(e.vin, rec.vin)
             )
-            for rec in eld_records
-        ):
+        else:
+            resumed = any(
+                not quantumeld.is_disconnected(
+                    rec, threshold_seconds=config.ELD_STALE_THRESHOLD, now=now
+                )
+                for rec in eld_records
+            )
+        if resumed:
             await store.resolve_event(e.id)
             # All-clear goes out even if reminders were muted.
             await _notify(bot, company, format_reconnected(e, company_name=company.name))
-            logger.info("Tracker[%s]: %s ELD reconnected — resolved.",
-                        company.name, e.unit_number)
+            logger.info("Tracker[%s]: %s ELD %s — resolved.", company.name,
+                        e.unit_number,
+                        "recording movement again" if e.is_no_data else "reconnected")
             continue
 
         # A paused (stopped) unit's anomaly is over for now: no stop re-detection,
