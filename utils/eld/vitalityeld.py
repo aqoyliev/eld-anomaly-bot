@@ -43,6 +43,10 @@ _MAX_PAGES = 50
 _DRIVER_TTL_SECONDS = 3600
 _driver_cache: Dict[str, Tuple[float, Dict[str, str]]] = {}
 
+# Trucks come and go (deactivated, re-activated) a few times a day at most.
+_ACTIVE_TTL_SECONDS = 600
+_active_cache: Dict[str, Tuple[float, set]] = {}
+
 
 @dataclass
 class VitalityVehicle:
@@ -167,6 +171,37 @@ async def _driver_names(
     return names
 
 
+async def _active_vehicle_ids(
+    session: aiohttp.ClientSession, base_url: str, headers: dict,
+    company_key: str, brand: str,
+) -> Optional[set]:
+    """vehicle_ids of the carrier's ACTIVE trucks, cached for ten minutes.
+
+    ``/v2/latest-vehicle-status`` also lists trucks deactivated in the panel
+    (drivers drop a truck at the yard, it is deactivated, yard staff move it
+    while the ELD is off — all looks like a disconnect), but ``/v2/vehicles``
+    holds only the active ones. Returns None when the list is unavailable or
+    empty, meaning "don't filter": a lookup failure must never hide a fleet."""
+    cached = _active_cache.get(company_key)
+    if cached and time.monotonic() - cached[0] < _ACTIVE_TTL_SECONDS:
+        return cached[1]
+    try:
+        rows = await _fetch_pages(
+            session, f"{base_url}/v2/vehicles", headers, _VEHICLE_PAGE_SIZE, brand
+        )
+    except Exception:
+        logger.warning("%s: active-vehicle list lookup failed", brand, exc_info=True)
+        return cached[1] if cached else None
+    ids = {
+        r["vehicle_id"] for r in rows
+        if r.get("vehicle_id") and r.get("active") is not False
+    }
+    if not ids:
+        return None
+    _active_cache[company_key] = (time.monotonic(), ids)
+    return ids
+
+
 async def fetch_units(
     company_key: str, provider_key: str, base_url: str, *,
     brand: str = "Vitality",
@@ -186,6 +221,20 @@ async def fetch_units(
             session, f"{base_url}/v2/latest-vehicle-status", headers,
             _VEHICLE_PAGE_SIZE, brand,
         )
+        active_ids = (
+            await _active_vehicle_ids(session, base_url, headers, company_key, brand)
+            if raw_units else None
+        )
+        if active_ids is not None:
+            total = len(raw_units)
+            raw_units = [
+                r for r in raw_units
+                if not r.get("vehicle_id") or r["vehicle_id"] in active_ids
+            ]
+            if len(raw_units) < total:
+                logger.debug(
+                    "%s: skipped %d deactivated truck(s)", brand, total - len(raw_units)
+                )
         drivers = (
             await _driver_names(session, base_url, headers, company_key, brand)
             if any(r.get("driver_id") for r in raw_units) else {}
