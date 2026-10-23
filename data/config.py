@@ -60,6 +60,9 @@ EVO_BASE_URL = env.str("EVO_BASE_URL", "https://read.fiveeld.com/api/v2")
 # (set with /seteld or the /addcompany wizard).
 VITALITY_BASE_URL = env.str("VITALITY_BASE_URL", "https://api.drivehos.app")
 VITALITY_PROVIDER_KEY = env.str("VITALITY_PROVIDER_KEY", "")
+# Vitality Plus: the same API and company keys under a second provider key, for
+# carriers that moved over. Optional; see vitalityeld.fetch_units.
+VITALITY_PLUS_PROVIDER_KEY = env.str("VITALITY_PLUS_PROVIDER_KEY", "")
 
 # Zero ELD — fourth ELD-side provider. It runs on the same DriveHOS platform and
 # API as Vitality (same client, utils/eld/vitalityeld.py); it's a separate

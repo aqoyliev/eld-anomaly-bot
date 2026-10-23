@@ -28,6 +28,8 @@ from typing import Dict, List, Optional, Tuple
 
 import aiohttp
 
+from data import config
+
 from .quantumeld import quantum_key
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,18 @@ _driver_cache: Dict[str, Tuple[float, Dict[str, str]]] = {}
 # Trucks come and go (deactivated, re-activated) a few times a day at most.
 _ACTIVE_TTL_SECONDS = 600
 _active_cache: Dict[str, Tuple[float, set]] = {}
+
+# Which provider key last produced units for a company (Vitality vs Vitality Plus).
+_provider_used: Dict[str, str] = {}
+
+
+class DriveHOSAuthError(RuntimeError):
+    """401/403: DriveHOS rejected the carrier's company key (or ours). Not a
+    blip — it stays that way until someone fixes the key."""
+
+    def __init__(self, message: str, status: int):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -134,7 +148,10 @@ async def _fetch_pages(
             if resp.status != 200:
                 # Truncate the body — error pages can be full HTML.
                 body = " ".join((await resp.text()).split())[:160]
-                raise RuntimeError(f"{brand} {url} HTTP {resp.status}: {body}")
+                message = f"{brand} {url} HTTP {resp.status}: {body}"
+                if resp.status in (401, 403):
+                    raise DriveHOSAuthError(message, resp.status)
+                raise RuntimeError(message)
             data = await resp.json(content_type=None)
         if data.get("description") != "success":
             raise RuntimeError(f"{brand} {url} error: {data.get('description')}")
@@ -202,7 +219,7 @@ async def _active_vehicle_ids(
     return ids
 
 
-async def fetch_units(
+async def _fetch_snapshot(
     company_key: str, provider_key: str, base_url: str, *,
     brand: str = "Vitality",
 ) -> Dict[str, VitalityVehicle]:
@@ -249,6 +266,41 @@ async def fetch_units(
         units.setdefault(key, vehicle)
         units.setdefault(key.lstrip("0") or key, vehicle)
     return units
+
+
+async def fetch_units(
+    company_key: str, provider_key: str, base_url: str, *,
+    brand: str = "Vitality",
+) -> Dict[str, VitalityVehicle]:
+    """:func:`_fetch_snapshot` with the Vitality Plus fallback.
+
+    Vitality Plus is the same API under its own provider key
+    (``VITALITY_PLUS_PROVIDER_KEY``), and carriers that moved to it keep their
+    company key. The old provider key then answers 403 or an empty fleet, so
+    for Vitality the Plus key is tried next, and whichever key produced units
+    is remembered per company and tried first from then on."""
+    keys = [provider_key]
+    plus = config.VITALITY_PLUS_PROVIDER_KEY
+    if brand == "Vitality" and plus and plus != provider_key:
+        keys.append(plus)
+        if _provider_used.get(company_key) == plus:
+            keys.reverse()
+    first_error: Optional[Exception] = None
+    snapshot: Dict[str, VitalityVehicle] = {}
+    for key in keys:
+        try:
+            snapshot = await _fetch_snapshot(
+                company_key, key, base_url, brand=brand
+            )
+        except DriveHOSAuthError as exc:
+            first_error = first_error or exc
+            continue
+        if snapshot:
+            _provider_used[company_key] = key
+            return snapshot
+    if first_error is not None and not snapshot:
+        raise first_error
+    return snapshot
 
 
 def lookup(units: Dict[str, VitalityVehicle], unit_number: str) -> Optional[VitalityVehicle]:
