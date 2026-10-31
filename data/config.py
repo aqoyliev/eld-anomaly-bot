@@ -95,7 +95,7 @@ MOVING_SPEED_THRESHOLD = env.float("MOVING_SPEED_THRESHOLD", 10.0)
 # this has held for NO_DATA_ALERT_CYCLES consecutive polls at or above
 # NO_DATA_MIN_SPEED mph on the movement provider. NO_DATA_ALERTS=0 turns it off
 # (the ELD-MISMATCH log lines stay).
-NO_DATA_ALERTS = env.bool("NO_DATA_ALERTS", True)
+NO_DATA_ALERTS = env.bool("NO_DATA_ALERTS", False)
 NO_DATA_ALERT_CYCLES = env.int("NO_DATA_ALERT_CYCLES", 2)
 NO_DATA_MIN_SPEED = env.float("NO_DATA_MIN_SPEED", 20.0)
 
