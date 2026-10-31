@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from aiogram import executor
 
@@ -9,6 +10,7 @@ from utils.set_bot_commands import set_default_commands
 from utils.eld import store
 from utils.eld.poller import run_poller
 from utils.eld.tracker import run_tracker
+from utils.internal_api import server as internal_api
 
 
 async def on_startup(dispatcher):
@@ -29,8 +31,16 @@ async def on_startup(dispatcher):
     # stop detection, reminders, and reconnect-based resolution.
     asyncio.create_task(run_tracker(bot))
 
+    # Internal HTTP API for other bots (only when INTERNAL_API_KEY is set).
+    # A failure to bind must not take the alerting bot down with it.
+    try:
+        await internal_api.start()
+    except Exception:
+        logging.getLogger(__name__).exception("Internal API failed to start")
+
 
 async def on_shutdown(dispatcher):
+    await internal_api.stop()
     # Release the database connection pool (no-op for SQLite).
     await store.close()
 

@@ -167,8 +167,20 @@ All settings live in `.env` (gitignored, never committed):
 | `NO_DATA_MIN_SPEED`      | `20`                                             | mph the movement provider must show for that case |
 | `DATABASE_URL`           | — (unset)                                        | Postgres DSN. If set, the bot uses PostgreSQL (asyncpg); Railway's Postgres plugin injects this. Unset → SQLite. |
 | `DB_PATH`                | `db.sqlite3`                                     | SQLite database file (used when `DATABASE_URL` is unset) |
+| `INTERNAL_API_KEY`       | — (unset)                                        | Turns on the [internal API](docs/internal-api.md) for other bots (sent as `X-Api-Key`). Unset → no web server. |
+| `PORT`                   | `8080`                                           | Port of the internal API (Railway injects it) |
+| `INTERNAL_API_COMPANY_ALIASES` | —                                          | `slug=<company id or name>,...` — names other bots may use for a company |
 
 Deploying to Railway? See **[SETUP.md → Deploy to Railway](SETUP.md#deploy-to-railway)**.
+
+## Internal API
+
+Other bots (the driver-alerts bot) get Vitality / Zero facts — vehicle position
+and status, the driver on a unit with duty status, driver name and phone — from
+this bot over a small authenticated JSON API instead of holding DriveHOS keys
+themselves. It reuses the poller's data and short caches, and is off unless
+`INTERNAL_API_KEY` is set. Contract, freshness rules and Railway steps:
+**[docs/internal-api.md](docs/internal-api.md)**.
 
 ## Project structure
 
@@ -193,6 +205,7 @@ Deploying to Railway? See **[SETUP.md → Deploy to Railway](SETUP.md#deploy-to-
 │   ├── poller.py              # 5-min loop, per company
 │   ├── tracker.py             # 2-min loop: resolve / stopped / reminders, per company
 │   └── formatting.py          # Alert / status / history rendering
+├── utils/internal_api/        # JSON API for other bots (docs/internal-api.md)
 └── scripts/
     ├── quantum_probe.py       # One-shot Quantum API check
     ├── quantum_watch.py       # Poll until a Quantum token is authorized

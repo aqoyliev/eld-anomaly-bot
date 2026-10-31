@@ -52,6 +52,15 @@ _active_cache: Dict[str, Tuple[float, set]] = {}
 # Which provider key last produced units for a company (Vitality vs Vitality Plus).
 _provider_used: Dict[str, str] = {}
 
+# The internal API (utils/internal_api) serves other bots from the data this
+# client already fetched instead of asking DriveHOS again:
+#   * _latest_raw: (base_url, company_key) -> the last latest-vehicle-status
+#     rows, BEFORE the deactivated-truck filter, with when and how they came;
+#   * _roster_rows: company_key -> (monotonic time, the /v2/drivers rows), kept
+#     next to _driver_cache so one roster fetch an hour serves both.
+_latest_raw: Dict[Tuple[str, str], "RawFleet"] = {}
+_roster_rows: Dict[str, Tuple[float, List[dict]]] = {}
+
 
 class DriveHOSAuthError(RuntimeError):
     """401/403: DriveHOS rejected the carrier's company key (or ours). Not a
@@ -127,6 +136,55 @@ def _parse_unit(raw: dict, drivers: Dict[str, str]) -> Optional[VitalityVehicle]
     )
 
 
+@dataclass
+class RawFleet:
+    """One latest-vehicle-status answer as DriveHOS gave it (see _latest_raw)."""
+    fetched_at: datetime          # tz-aware UTC
+    fetched_mono: float           # time.monotonic() at the fetch
+    provider_key: str             # the provider key that produced it
+    brand: str                    # "Vitality" / "Zero"
+    rows: List[dict]              # every vehicle, deactivated ones included
+    active_ids: Optional[set]     # /v2/vehicles ids; None = unknown
+    source: str = "poller"        # "poller" / "on_demand" (set by the API)
+
+
+def _publish_raw(
+    company_key: str, provider_key: str, base_url: str, brand: str,
+    rows: List[dict], active_ids: Optional[set],
+) -> None:
+    _latest_raw[(base_url.rstrip("/"), company_key)] = RawFleet(
+        fetched_at=datetime.now(timezone.utc), fetched_mono=time.monotonic(),
+        provider_key=provider_key, brand=brand, rows=list(rows),
+        active_ids=set(active_ids) if active_ids is not None else None,
+    )
+
+
+def latest_raw(company_key: str, base_url: str) -> Optional[RawFleet]:
+    """The last fleet fetched for this carrier key (by the poller or the
+    internal API), or None."""
+    return _latest_raw.get((base_url.rstrip("/"), company_key))
+
+
+def roster_rows(company_key: str) -> Optional[Tuple[float, List[dict]]]:
+    """(monotonic time, /v2/drivers rows) from the last roster fetch, or None."""
+    return _roster_rows.get(company_key)
+
+
+def remember_roster(company_key: str, rows: List[dict]) -> Dict[str, str]:
+    """Store a freshly fetched /v2/drivers roster for both users of it and
+    return {driver_id: "FIRST LAST"} (the poller's upper-case style)."""
+    names = {}
+    for r in rows:
+        # Roster names carry stray spaces ("ELISE ", "PRINCE JAMES "); collapse.
+        name = " ".join(f"{r.get('first_name') or ''} {r.get('last_name') or ''}".split())
+        if r.get("driver_id") and name:
+            names[r["driver_id"]] = name.upper()  # same style as Quantum's names
+    now = time.monotonic()
+    _driver_cache[company_key] = (now, names)
+    _roster_rows[company_key] = (now, [r for r in rows if isinstance(r, dict)])
+    return names
+
+
 def _headers(company_key: str, provider_key: str) -> dict:
     return {
         "accept": "application/json",
@@ -178,14 +236,7 @@ async def _driver_names(
     except Exception:
         logger.warning("%s: driver roster lookup failed", brand, exc_info=True)
         return cached[1] if cached else {}
-    names = {}
-    for r in rows:
-        # Roster names carry stray spaces ("ELISE ", "PRINCE JAMES "); collapse.
-        name = " ".join(f"{r.get('first_name') or ''} {r.get('last_name') or ''}".split())
-        if r.get("driver_id") and name:
-            names[r["driver_id"]] = name.upper()  # same style as Quantum's names
-    _driver_cache[company_key] = (time.monotonic(), names)
-    return names
+    return remember_roster(company_key, rows)
 
 
 async def _active_vehicle_ids(
@@ -238,6 +289,7 @@ async def _fetch_snapshot(
             session, f"{base_url}/v2/latest-vehicle-status", headers,
             _VEHICLE_PAGE_SIZE, brand,
         )
+        all_rows = raw_units  # before the deactivated-truck filter
         active_ids = (
             await _active_vehicle_ids(session, base_url, headers, company_key, brand)
             if raw_units else None
@@ -256,6 +308,7 @@ async def _fetch_snapshot(
             await _driver_names(session, base_url, headers, company_key, brand)
             if any(r.get("driver_id") for r in raw_units) else {}
         )
+    _publish_raw(company_key, provider_key, base_url, brand, all_rows, active_ids)
 
     units: Dict[str, VitalityVehicle] = {}
     for raw in raw_units:

@@ -133,3 +133,23 @@ STOP_SPEED_MPH = env.float("STOP_SPEED_MPH", 1.0)
 # DB_PATH. Accepts postgres:// or postgresql:// DSNs.
 DATABASE_URL = env.str("DATABASE_URL", "")
 DB_PATH = env.str("DB_PATH", "db.sqlite3")
+
+# --- Internal HTTP API (utils/internal_api) ----------------------------------
+# A small JSON API that serves other bots (the driver-alerts bot, nexus-fleet)
+# the Vitality / Zero facts this bot already polls, so they need no DriveHOS
+# keys of their own. See docs/internal-api.md.
+# Empty INTERNAL_API_KEY = the web server does not start at all (and every
+# /api/internal route answers 404). Callers send the key in X-Api-Key.
+INTERNAL_API_KEY = env.str("INTERNAL_API_KEY", "")
+# Railway injects PORT; INTERNAL_API_PORT is the local fallback.
+PORT = env.int("PORT", env.int("INTERNAL_API_PORT", 8080))
+# Empty = every interface (IPv4 and IPv6, which Railway's private network needs).
+INTERNAL_API_HOST = env.str("INTERNAL_API_HOST", "")
+# Extra names a caller may use for a company: "jrd=7,acme=Acme Freight" maps
+# the caller's slug to this bot's company id or exact company name. Without an
+# alias a slug still matches a company whose name equals it ignoring case and
+# punctuation ("jrd" -> "JRD").
+INTERNAL_API_COMPANY_ALIASES = env.str("INTERNAL_API_COMPANY_ALIASES", "")
+# How long a request waits for DriveHOS when the poller's data is too old (s).
+# The fetch keeps running after a timeout, so the next request gets it.
+INTERNAL_API_UPSTREAM_TIMEOUT = env.float("INTERNAL_API_UPSTREAM_TIMEOUT", 6.0)
