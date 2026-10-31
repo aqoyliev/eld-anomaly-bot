@@ -16,8 +16,10 @@ docs/internal-api.md.
 
 import logging
 import secrets
+import time
+from collections import deque
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Deque, Dict, Optional
 
 from aiohttp import web
 
@@ -31,18 +33,77 @@ logger = logging.getLogger(__name__)
 PREFIX = "/api/internal/vitality/"
 API_VERSION = 1
 
+# The server refuses to start with a shorter INTERNAL_API_KEY: it is exposed on
+# a public domain, so the key is all that stands between it and the internet.
+MIN_KEY_LENGTH = 32
+
+# Failed-key throttle, per client IP: after AUTH_FAIL_LIMIT bad keys within
+# AUTH_FAIL_WINDOW seconds, every request from that IP gets 429 (even with the
+# right key) until the oldest failure leaves the window.
+AUTH_FAIL_LIMIT = 10
+AUTH_FAIL_WINDOW = 300.0
+_MAX_TRACKED_IPS = 10000
+_auth_failures: Dict[str, Deque[float]] = {}
+
 
 def _json(payload: dict, status: int = 200) -> web.Response:
     return web.json_response(payload, status=status)
 
 
+def client_ip(request: web.Request) -> str:
+    """The caller's IP. Railway's proxy puts it first in X-Forwarded-For;
+    without that header, the socket's peer."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    first = forwarded.split(",")[0].strip()
+    return first[:64] if first else (request.remote or "unknown")
+
+
+def _recent_failures(ip: str, now: float) -> Deque[float]:
+    failures = _auth_failures.get(ip)
+    if failures is None:
+        return deque()
+    while failures and now - failures[0] >= AUTH_FAIL_WINDOW:
+        failures.popleft()
+    if not failures:
+        _auth_failures.pop(ip, None)
+    return failures
+
+
+def _note_failure(ip: str, now: float) -> int:
+    if ip not in _auth_failures and len(_auth_failures) >= _MAX_TRACKED_IPS:
+        # Bounded memory: drop IPs whose failures have all expired, and if a
+        # flood still fills the table, the oldest-tracked ones.
+        for other in list(_auth_failures):
+            _recent_failures(other, now)
+        while len(_auth_failures) >= _MAX_TRACKED_IPS:
+            _auth_failures.pop(next(iter(_auth_failures)))
+    failures = _auth_failures.setdefault(ip, deque())
+    failures.append(now)
+    return len(failures)
+
+
 def _internal_key_refusal(request: web.Request) -> Optional[web.Response]:
-    """None when the request may go on; else the 404 (API off) or 401 answer."""
+    """None when the request may go on; else the 404 (API off), 429 (too many
+    bad keys from this IP) or 401 answer. The presented key is never logged."""
     expected = config.INTERNAL_API_KEY
     if not expected:
         return _json({"error": "not_found", "message": "not found"}, 404)
+    ip = client_ip(request)
+    now = time.monotonic()
+    failures = _recent_failures(ip, now)
+    if len(failures) >= AUTH_FAIL_LIMIT:
+        retry = max(1, int(AUTH_FAIL_WINDOW - (now - failures[0])) + 1)
+        response = _json({"error": "too_many_requests",
+                          "message": "too many bad X-Api-Key attempts; try again later",
+                          "retry_after_seconds": retry}, 429)
+        response.headers["Retry-After"] = str(retry)
+        return response
     sent = request.headers.get("X-Api-Key", "")
     if not secrets.compare_digest(sent.encode(), expected.encode()):
+        count = _note_failure(ip, now)
+        if count == AUTH_FAIL_LIMIT:
+            logger.warning("Internal API: %d bad X-Api-Key attempts from %s within %ds; "
+                           "throttling it", count, ip, int(AUTH_FAIL_WINDOW))
         return _json({"error": "unauthorized", "message": "bad or missing X-Api-Key"}, 401)
     return None
 
@@ -139,7 +200,8 @@ async def api_fleet(request: web.Request) -> web.Response:
     entry = await facts.fleet(feed, max_age)
     drivers = await facts.roster(feed) if any(r.get("driver_id") for r in entry.rows) else {}
     now = _now()
-    vehicles = [facts.vehicle_json(r, entry, drivers, now) for r in entry.rows
+    vehicles = [facts.vehicle_json(r, entry, drivers, now, with_phone=False)
+                for r in entry.rows
                 if str(r.get("number") or "").strip()]
     return _json({**_head(feed, entry), "snapshot": facts.snapshot_json(entry, now),
                   "vehicles": vehicles})
@@ -221,10 +283,15 @@ _runner: Optional[web.AppRunner] = None
 
 async def start() -> Optional[web.AppRunner]:
     """Serve the API on PORT. Does nothing (returns None) without
-    INTERNAL_API_KEY."""
+    INTERNAL_API_KEY, or with one shorter than MIN_KEY_LENGTH."""
     global _runner
     if not config.INTERNAL_API_KEY or _runner is not None:
         return _runner
+    if len(config.INTERNAL_API_KEY) < MIN_KEY_LENGTH:
+        logger.error("Internal API NOT started: INTERNAL_API_KEY is shorter than %d "
+                     "characters. Generate one with: python -c \"import secrets; "
+                     "print(secrets.token_urlsafe(48))\"", MIN_KEY_LENGTH)
+        return None
     runner = web.AppRunner(build_app(), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, config.INTERNAL_API_HOST or None, config.PORT).start()

@@ -18,7 +18,7 @@ from utils.internal_api import server as api_server
 from utils.internal_api import unit_match
 from utils.internal_api import vitality as facts
 
-API_KEY = "test-internal-key"
+API_KEY = "test-internal-key-0123456789-abcdefghij"  # >= 32 chars, made up
 PRIMARY = "test-provider-key"   # conftest's VITALITY_PROVIDER_KEY
 PLUS = "test-plus-key"
 CARRIER_KEY = "carrier-key-one"
@@ -151,7 +151,9 @@ def _clean(monkeypatch):
                   vitalityeld._driver_cache, vitalityeld._latest_raw, vitalityeld._roster_rows):
         cache.clear()
     facts._reset()
+    api_server._auth_failures.clear()
     yield
+    api_server._auth_failures.clear()
     for cache in (vitalityeld._provider_used, vitalityeld._active_cache,
                   vitalityeld._driver_cache, vitalityeld._latest_raw, vitalityeld._roster_rows):
         cache.clear()
@@ -220,6 +222,80 @@ def test_routes_are_404_without_internal_api_key(db, monkeypatch):
 def test_server_does_not_start_without_key(monkeypatch):
     monkeypatch.setattr(config, "INTERNAL_API_KEY", "")
     assert run(api_server.start()) is None
+
+
+def test_server_refuses_a_short_key(monkeypatch, caplog):
+    monkeypatch.setattr(config, "INTERNAL_API_KEY", "x" * 31)
+    with caplog.at_level("ERROR"):
+        assert run(api_server.start()) is None
+    assert "shorter than 32 characters" in caplog.text
+    assert "x" * 31 not in caplog.text
+
+
+def test_server_starts_with_a_long_key(monkeypatch):
+    monkeypatch.setattr(config, "PORT", 0)  # any free port
+
+    async def go():
+        try:
+            return await api_server.start()
+        finally:
+            await api_server.stop()
+    assert run(go()) is not None
+
+
+# ── failed-key throttle ──────────────────────────────────────────────────────
+
+def _xff(ip, key="wrong-key"):
+    return {"X-Api-Key": key, "X-Forwarded-For": f"{ip}, 10.0.0.1"}
+
+
+def test_bad_keys_are_throttled_per_ip(db, monkeypatch, caplog):
+    async def go():
+        async with _env(monkeypatch) as (client, fake):
+            with caplog.at_level("INFO"):
+                for _ in range(api_server.AUTH_FAIL_LIMIT):
+                    status, _b = await _get(client, P + "fleet", headers=_xff("203.0.113.7"),
+                                            company="jrd")
+                    assert status == 401
+                # the 11th, even with the right key, is refused
+                resp = await client.get(P + "fleet", params={"company": "jrd"},
+                                        headers=_xff("203.0.113.7", API_KEY))
+                body = await resp.json()
+                assert resp.status == 429 and body["error"] == "too_many_requests"
+                assert 0 < int(resp.headers["Retry-After"]) <= 301
+            # the key presented is never logged
+            assert "wrong-key" not in caplog.text and API_KEY not in caplog.text
+            assert "203.0.113.7" in caplog.text  # the throttled IP is
+            # another client (first X-Forwarded-For hop) is not affected
+            status, _b = await _get(client, P + "fleet", headers=_xff("198.51.100.2", API_KEY),
+                                    company="jrd")
+            assert status == 200
+            # once the failures leave the window, the IP is let in again
+            failures = api_server._auth_failures["203.0.113.7"]
+            for i in range(len(failures)):
+                failures[i] -= api_server.AUTH_FAIL_WINDOW
+            status, _b = await _get(client, P + "fleet", headers=_xff("203.0.113.7", API_KEY),
+                                    company="jrd")
+            assert status == 200 and "203.0.113.7" not in api_server._auth_failures
+    run(go())
+
+
+def test_good_keys_are_never_throttled(db, monkeypatch):
+    async def go():
+        async with _env(monkeypatch) as (client, _):
+            for _ in range(api_server.AUTH_FAIL_LIMIT + 5):
+                status, _b = await _get(client, P + "companies")
+                assert status == 200
+            assert api_server._auth_failures == {}
+    run(go())
+
+
+def test_client_ip_without_forwarded_header():
+    from aiohttp.test_utils import make_mocked_request
+    req = make_mocked_request("GET", "/", headers={})
+    assert api_server.client_ip(req)  # falls back to the peer, never empty
+    req = make_mocked_request("GET", "/", headers={"X-Forwarded-For": " 192.0.2.5 , 10.1.1.1"})
+    assert api_server.client_ip(req) == "192.0.2.5"
 
 
 def test_unknown_route_is_json_404(db, monkeypatch):
@@ -294,15 +370,28 @@ def test_fleet_snapshot(db, monkeypatch):
             assert v["online"] is True and v["status"] == "STATIONARY"
             assert v["location"] == "Test place" and v["odometer"] == 1000.0
             assert 25 <= v["report_age_seconds"] <= 40
-            assert v["driver"] == {"id": "d1", "name": "TEST DRIVER ONE", "phone": "+15550100001"}
+            # the bulk listing never carries phones
+            assert v["driver"] == {"id": "d1", "name": "TEST DRIVER ONE"}
             assert by_number["4063z"]["heading"] == 90.0 and by_number["4063z"]["speed"] == 61.0
-            assert by_number["4063z"]["driver"]["phone"] == "+15550100002"
+            assert by_number["4063z"]["driver"] == {"id": "d2", "name": "Test Driver Two"}
             off = by_number["0942"]
             assert off["online"] is False and off["position"] is None
-            assert off["driver"] == {"id": "d3", "name": None, "phone": None}  # not in roster
+            assert off["driver"] == {"id": "d3", "name": None}  # not in roster
             assert by_number["7001"]["driver"] is None
             # the fleet listing never asks for duty statuses
             assert fake.count("/v2/latest-driver-status") == 0
+    run(go())
+
+
+def test_fleet_listing_has_no_phones_but_unit_and_driver_do(db, monkeypatch):
+    async def go():
+        async with _env(monkeypatch) as (client, _):
+            resp = await client.get(P + "fleet", params={"company": "jrd"}, headers=H)
+            text = await resp.text()
+            assert resp.status == 200 and "phone" not in text and "+1555" not in text
+            status, body = await _get(client, P + "unit", company="jrd", unit="4063")
+            assert body["matches"][0]["driver"]["phone"] == "+15550100001"
+            assert body["matches"][1]["driver"]["phone"] == "+15550100002"
     run(go())
 
 

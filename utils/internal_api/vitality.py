@@ -412,8 +412,11 @@ class DriverRecord:
     name: str
     phone: str
 
-    def json(self) -> dict:
-        return {"id": self.id, "name": self.name or None, "phone": self.phone or None}
+    def json(self, with_phone: bool = True) -> dict:
+        out = {"id": self.id, "name": self.name or None}
+        if with_phone:
+            out["phone"] = self.phone or None
+        return out
 
 
 def _record(row: dict, driver_id: str = "") -> DriverRecord:
@@ -557,7 +560,9 @@ def _heading(row: dict) -> Optional[float]:
 
 
 def vehicle_json(row: dict, entry: vitalityeld.RawFleet, drivers: Dict[str, DriverRecord],
-                 now: datetime) -> dict:
+                 now: datetime, with_phone: bool = True) -> dict:
+    """One vehicle as the API returns it. with_phone=False (the bulk fleet
+    listing) leaves the driver's phone out altogether."""
     reported = _parse_time(row.get("timestamp"))
     age = _age(reported, now)
     status = _clean(row.get("status")).upper() or None
@@ -582,7 +587,7 @@ def vehicle_json(row: dict, entry: vitalityeld.RawFleet, drivers: Dict[str, Driv
         "odometer": _num(row.get("odometer")),
         "last_report_at": iso(reported),
         "report_age_seconds": age,
-        "driver": (rec.json() if rec else {"id": driver_id, "name": None, "phone": None})
+        "driver": (rec or DriverRecord(driver_id, "", "")).json(with_phone)
         if driver_id else None,
     }
 

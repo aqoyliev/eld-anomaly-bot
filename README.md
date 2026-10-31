@@ -167,7 +167,7 @@ All settings live in `.env` (gitignored, never committed):
 | `NO_DATA_MIN_SPEED`      | `20`                                             | mph the movement provider must show for that case |
 | `DATABASE_URL`           | — (unset)                                        | Postgres DSN. If set, the bot uses PostgreSQL (asyncpg); Railway's Postgres plugin injects this. Unset → SQLite. |
 | `DB_PATH`                | `db.sqlite3`                                     | SQLite database file (used when `DATABASE_URL` is unset) |
-| `INTERNAL_API_KEY`       | — (unset)                                        | Turns on the [internal API](docs/internal-api.md) for other bots (sent as `X-Api-Key`). Unset → no web server. |
+| `INTERNAL_API_KEY`       | — (unset)                                        | Turns on the [internal API](docs/internal-api.md) for other bots (sent as `X-Api-Key`, at least 32 characters). Unset or shorter → no web server. |
 | `PORT`                   | `8080`                                           | Port of the internal API (Railway injects it) |
 | `INTERNAL_API_COMPANY_ALIASES` | —                                          | `slug=<company id or name>,...` — names other bots may use for a company |
 

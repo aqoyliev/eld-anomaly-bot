@@ -12,7 +12,7 @@ The server is aiohttp and runs in the bot's own event loop (`app.py` →
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `INTERNAL_API_KEY` | empty | Shared secret. Callers send it in the `X-Api-Key` header. **Empty = the server does not start**, and every `/api/internal/...` route answers 404. |
+| `INTERNAL_API_KEY` | empty | Shared secret. Callers send it in the `X-Api-Key` header. **Empty = the server does not start**, and every `/api/internal/...` route answers 404. **Shorter than 32 characters = the server refuses to start** and logs an error that says so. See [Generating the key](#generating-the-key). |
 | `PORT` | `INTERNAL_API_PORT`, else `8080` | Port to listen on. Railway injects `PORT`. |
 | `INTERNAL_API_HOST` | empty (all interfaces, IPv4 and IPv6) | Bind address. Leave it empty on Railway, because private networking can use IPv6. |
 | `INTERNAL_API_COMPANY_ALIASES` | empty | Extra company names, for example `jrd=7,acme=Acme Freight LLC`. Each entry maps a caller's slug to this bot's company id or exact company name. See [Company mapping](#company-mapping). |
@@ -25,9 +25,35 @@ those keys.
 
 ## Authentication
 
+The API is meant to run on a public Railway domain, so the key is its only
+protection.
+
 - `GET /health` needs no key.
 - Every `/api/internal/vitality/...` request needs `X-Api-Key: <INTERNAL_API_KEY>`.
   The key is compared in constant time. A missing or wrong key gets 401.
+- **Bad-key throttle.** After 10 bad keys from one client IP within 5
+  minutes, every request from that IP gets 429 `too_many_requests`, even with
+  the right key. The answer includes a `Retry-After` header and
+  `retry_after_seconds`. The block lifts when the oldest failure is 5 minutes
+  old.
+  - The client IP is the first hop of `X-Forwarded-For`, which Railway's proxy
+    sets. Without that header, it is the socket peer.
+  - Requests with the right key are never counted.
+- **Logging.** The key a caller presents is never logged, right or wrong. Only
+  the IP is logged, once, when it gets throttled.
+
+### Generating the key
+
+Use 32 characters or more of real randomness, for example:
+
+```sh
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+That prints a 64-character URL-safe key. Paste it into the Railway variables
+of both services. Never commit it, and never put it in a URL or query string,
+because only the header is checked. To rotate the key, set the new value on
+nexus-hos and on driver-alerts, then redeploy both.
 
 ## Company mapping
 
@@ -118,7 +144,11 @@ This bot's companies and how callers can name them. No keys are included.
 ### `GET /api/internal/vitality/fleet?company=jrd[&provider=auto][&max_age=120]`
 
 Every vehicle in the latest-vehicle-status feed. Deactivated trucks are
-included, with `active: false`. Duty statuses are not included.
+included, with `active: false`.
+
+This bulk listing deliberately leaves out duty statuses and driver phones:
+its `driver` objects are `{"id", "name"}` only. To get a phone, ask for one
+truck (`unit`) or one driver (`driver`).
 
 ```json
 {
@@ -142,13 +172,14 @@ included, with `active: false`. Duty statuses are not included.
       "odometer": 123456.0,
       "last_report_at": "2026-11-01T10:14:30Z",
       "report_age_seconds": 72,
-      "driver": {"id": "d-123", "name": "Test Driver", "phone": "+15550100001"}
+      "driver": {"id": "d-123", "name": "Test Driver"}
     }
   ]
 }
 ```
 
-Vehicle fields:
+Vehicle fields (in `fleet`, `unit` and `driver` answers alike, except where
+noted):
 
 - `status`: the value DriveHOS sends (`IN_MOTION`, `STATIONARY` or `OFFLINE`),
   or null.
@@ -162,7 +193,8 @@ Vehicle fields:
   `course` or `direction` field. DriveHOS is not known to send one, so expect
   null.
 - `driver`: null when no driver is assigned. Its `name` and `phone` are null
-  when the roster has none. The name is "First Last" in the roster's own
+  when the roster has none. `phone` appears only in `unit` and `driver`
+  answers. The name is "First Last" in the roster's own
   letter case, with spaces collapsed, falling back to the username.
 - `source`: `poller` when the poller fetched this data, `on_demand` when the
   API did.
@@ -270,6 +302,7 @@ Every error body looks like
 | 404 | `unit_not_found` | No vehicle could be this unit (`snapshot` is included). |
 | 404 | `driver_not_found` | DriveHOS knows no such driver for this company. |
 | 409 | `company_ambiguous` | Several companies match (`company_ids` is included). Set an alias. |
+| 429 | `too_many_requests` | Too many bad keys from this IP. Wait `Retry-After` seconds. |
 | 503 | `provider_not_configured` | This bot has no provider key for that provider. |
 | 503 | `upstream_unavailable` | DriveHOS failed (HTTP error, network). May include `retry_after_seconds`. |
 | 503 | `upstream_auth_rejected` | DriveHOS refused the carrier key with both provider keys. |
@@ -279,26 +312,32 @@ Every error body looks like
 
 ## Railway: what the owner has to do
 
-Nothing changes until `INTERNAL_API_KEY` is set. Without it, no port is opened.
+nexus-hos and driver-alerts are in different Railway projects, so private
+networking (`*.railway.internal`) cannot reach across. **The expected setup
+is a public domain.** Nothing changes until `INTERNAL_API_KEY` is set; without
+it, no port is opened.
 
-1. On the nexus-hos service, set `INTERNAL_API_KEY` to a long random value.
-   Put the same value in the driver-alerts service's settings, under the name
-   its client will read.
-2. Pick how driver-alerts reaches nexus-hos:
-   - **Private networking (preferred).** Both services must be in the same
-     Railway project. If they are, driver-alerts calls
-     `http://<nexus-hos service>.railway.internal:<PORT>/api/internal/vitality/...`.
-     Railway injects `PORT`; you can also pin it by setting `PORT` (for
-     example `8080`) on nexus-hos. This bot binds every interface, IPv6
-     included.
-   - **Public domain.** Use this if the two services are in different
-     projects. Generate a domain for nexus-hos under Settings → Networking,
-     with its target port set to `PORT`. The API key is then the only
-     protection.
-3. Optional: set `INTERNAL_API_COMPANY_ALIASES` (for example `jrd=<company id>`)
+1. Generate a key (see [Generating the key](#generating-the-key)) and set it
+   as `INTERNAL_API_KEY` on the nexus-hos service. Set the same value on the
+   driver-alerts service, under the name its client reads. A key shorter than
+   32 characters keeps the server off, and the deploy log shows
+   `Internal API NOT started: INTERNAL_API_KEY is shorter than 32 characters`.
+2. On nexus-hos, go to Settings → Networking → Generate Domain, and target the
+   port the bot listens on. Railway injects `PORT`; you can also set `PORT`
+   (for example `8080`) yourself and target that. driver-alerts then calls
+   `https://<generated domain>/api/internal/vitality/...` with the
+   `X-Api-Key` header.
+3. Check from your own machine:
+   - `GET https://<domain>/health` → `{"status": "ok"}`
+   - the same URL with a wrong key on an internal route → 401
+4. Optional: set `INTERNAL_API_COMPANY_ALIASES` (for example `jrd=<company id>`)
    if a driver-alerts slug does not match a nexus-hos company name. Check with
    `GET /api/internal/vitality/companies`.
-4. Optional: set a healthcheck path of `/health`. Leave it unset if you would
+5. Optional: set a healthcheck path of `/health`. Leave it unset if you would
    rather not tie the worker's deploys to the web server.
-5. The Procfile stays `worker: python app.py`. The web server runs inside that
+6. The Procfile stays `worker: python app.py`. The web server runs inside that
    same process.
+
+If the two services ever move into one project, private networking
+(`http://<service>.railway.internal:<PORT>`) works too, with no other change.
+The server binds every interface, IPv6 included.
