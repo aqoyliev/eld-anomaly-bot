@@ -236,6 +236,7 @@ async def poll_once(bot: Bot, company: store.Company) -> None:
         moving, quantum_lookup, evo_lookup=evo_lookup,
         vitality_lookup=vitality_lookup, zero_lookup=zero_lookup,
         threshold_seconds=config.ELD_STALE_THRESHOLD,
+        location_tolerance_miles=config.ELD_LOCATION_MATCH_MI,
     )
     # Log units whose Vitality/Zero record is fresh yet disagrees with the
     # movement provider — an ELD that pings its position but records no engine

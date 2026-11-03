@@ -83,6 +83,13 @@ POLL_INTERVAL = env.int("POLL_INTERVAL", 300)
 # disconnected / offline (default 10 minutes).
 ELD_STALE_THRESHOLD = env.int("ELD_STALE_THRESHOLD", 600)
 
+# A stale ELD record whose last position is within this many miles of where the
+# movement provider sees the truck now is not a disconnection (the ELD is still
+# on the truck, just reporting late). 0 turns the location check off. The HOS
+# team's rule of thumb: a truck is disconnected once it is 2-5 miles past the
+# ELD's last point, so the middle of that range.
+ELD_LOCATION_MATCH_MI = env.float("ELD_LOCATION_MATCH_MI", 3.0)
+
 # Speed (mph) above which a vehicle is considered "moving" by the movement
 # providers (GoMotive/Samsara). Anything at or below it is ignored by anomaly
 # detection — set high enough to skip GPS jitter and yard/dock maneuvering.

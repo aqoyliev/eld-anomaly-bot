@@ -10,6 +10,7 @@ actual ELD reporting fine (the other's record is a leftover for the number).
 """
 
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -97,6 +98,32 @@ def vins_conflict(a: Optional[str], b: Optional[str]) -> bool:
     return _edit_distance(na, nb, cap=_VIN_MISMATCH_TOLERANCE) > _VIN_MISMATCH_TOLERANCE
 
 
+def haversine_mi(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 3958.8  # earth radius, miles
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlam / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _location_matches(mv: object, rec: object, tolerance_miles: Optional[float]) -> bool:
+    """Whether the ELD's last position is where the movement provider sees the
+    truck now. A stale report that still sits on the truck's current position
+    means the ELD is tracking it, just late; a truck that has driven away from
+    the ELD's last point is the real disconnection. Unknown on either side
+    reads as "no match", so detection falls back to report freshness alone."""
+    if not tolerance_miles or tolerance_miles <= 0:
+        return False
+    coords = (
+        getattr(mv, "latitude", None), getattr(mv, "longitude", None),
+        getattr(rec, "latitude", None), getattr(rec, "longitude", None),
+    )
+    if any(c is None for c in coords):
+        return False
+    return haversine_mi(*coords) <= tolerance_miles
+
+
 def find_anomalies(
     moving: Iterable[object],
     quantum_lookup: Dict[str, Optional[QuantumVehicle]],
@@ -105,6 +132,7 @@ def find_anomalies(
     vitality_lookup: Optional[Dict[str, object]] = None,
     zero_lookup: Optional[Dict[str, object]] = None,
     threshold_seconds: int,
+    location_tolerance_miles: Optional[float] = None,
     now: Optional[datetime] = None,
 ) -> List[Anomaly]:
     """``moving`` is an iterable of movement vehicles (each exposes
@@ -116,6 +144,9 @@ def find_anomalies(
     a unit number across providers (GoMotive vs Samsara) — both must be checked,
     and the VIN comparison below decides which one (if either) is the truck
     the ELD system holds under that number.
+
+    A stale record whose position is within ``location_tolerance_miles`` of the
+    truck's current position is not a disconnection (see _location_matches).
 
     ``now`` defaults to UTC, matching the (naive) UTC report times."""
     now = now or datetime.utcnow()
@@ -159,11 +190,13 @@ def find_anomalies(
         # Anomalous only when EVERY ELD system that knows the truck is stale.
         # A fresh record in either system means its actual ELD is reporting
         # fine — in a mixed Quantum+EVO fleet the other system's stale record
-        # for the same number is just a leftover, not a disconnection.
+        # for the same number is just a leftover, not a disconnection. A record
+        # still sitting on the truck's position counts the same way.
         if any(
             not quantumeld.is_disconnected(
                 rec, threshold_seconds=threshold_seconds, now=now
             )
+            or _location_matches(mv, rec, location_tolerance_miles)
             for _, rec in matching
         ):
             continue

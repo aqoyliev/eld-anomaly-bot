@@ -22,7 +22,6 @@ unit is otherwise idle here — only its reconnect is watched.
 
 import asyncio
 import logging
-import math
 from datetime import datetime
 
 from aiogram import Bot
@@ -30,20 +29,11 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from data import config
 from . import evoeld, gomotive, quantumeld, samsara, store, vitalityeld
-from .detector import vins_conflict
+from .detector import haversine_mi, vins_conflict
 from .formatting import format_reconnected, format_reminder, format_stopped
 from .quantumeld import quantum_key
 
 logger = logging.getLogger(__name__)
-
-
-def _haversine_mi(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    r = 3958.8  # earth radius, miles
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlam = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlam / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
 
 
 def _reading_is_fresh(vehicle, provider: str) -> bool:
@@ -249,7 +239,7 @@ async def track_once(bot: Bot, company: store.Company) -> None:
             and e.last_lat is not None
             and e.last_lon is not None
         ):
-            moved_mi = _haversine_mi(e.last_lat, e.last_lon, gm.latitude, gm.longitude)
+            moved_mi = haversine_mi(e.last_lat, e.last_lon, gm.latitude, gm.longitude)
             # Motive reports speed: null for a parked vehicle, so null counts as
             # stopped (the displacement check guards against a null-but-moving read).
             slow = gm.speed is None or gm.speed <= config.STOP_SPEED_MPH
